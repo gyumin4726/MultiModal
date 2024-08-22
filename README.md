@@ -8,6 +8,11 @@ This is the official repository for "Mamba-FSCIL: Dynamic Adaptation with Select
 
 ![Mamba-FSCIL Framework](figs/framework.png)
 
+## 📒 Updates
+
+* **22 Aug:** We updated the arXiv version with additional experiments.
+* **20 Jul:** We released the code of our paper.
+* **8 Jul:** We released the first version of our paper.
 
 ## 🔨 Installation
 

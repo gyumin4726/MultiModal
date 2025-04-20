@@ -61,7 +61,7 @@ class MambaNeck(BaseModule):
                  loss_weight_sep=0.0,
                  loss_weight_sep_new=0.0,
                  param_avg_dim='0-1-3',
-                 detach_residual=True):
+                 detach_residual=False):
         super(MambaNeck, self).__init__(init_cfg=None)
         self.version = version
         assert self.version in ['ssm', 'ss2d'], f'Invalid branch version.'

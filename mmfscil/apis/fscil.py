@@ -320,13 +320,15 @@ def test_session(cfg,
                  inc_start: int,
                  inc_end: int,
                  base_num: int,
-                 mode='test'):
+                 mode='test',
+                 save_results=False):
     if mode == 'train':
         return 0
     rank, world_size = get_dist_info()
     model.eval()
-    logger.info("Evaluating session {}, from {} to {}.".format(
-        session_idx, inc_start, inc_end))
+    if not save_results:
+        logger.info("Evaluating session {}, from {} to {}.".format(
+            session_idx, inc_start, inc_end))
     test_set_memory = MemoryDataset(
         feats=test_feat[torch.logical_and(torch.ge(test_label, inc_start),
                                           torch.less(test_label, inc_end))],
@@ -395,12 +397,23 @@ def test_session(cfg,
     acc_i_old = torch.mean(results[torch.logical_and(
         torch.less(labels, inc_end - cfg.inc_step), torch.ge(
             labels, base_num))]).item() * 100.
-    logger.info(
-        "[{:02d}]Evaluation results : acc : {:.2f} ; acc_base : {:.2f} ; acc_inc : {:.2f}"
-        .format(session_idx, acc, acc_b, acc_i))
-    logger.info(
-        "[{:02d}]Evaluation results : acc_incremental_old : {:.2f} ; acc_incremental_new : {:.2f}"
-        .format(session_idx, acc_i_old, acc_i_new))
+    
+    if save_results:
+        return {
+            'session': session_idx,
+            'acc': acc,
+            'acc_base': acc_b,
+            'acc_inc': acc_i,
+            'acc_incremental_old': acc_i_old,
+            'acc_incremental_new': acc_i_new
+        }
+    else:
+        logger.info(
+            "[{:02d}]Evaluation results : acc : {:.2f} ; acc_base : {:.2f} ; acc_inc : {:.2f}"
+            .format(session_idx, acc, acc_b, acc_i))
+        logger.info(
+            "[{:02d}]Evaluation results : acc_incremental_old : {:.2f} ; acc_incremental_new : {:.2f}"
+            .format(session_idx, acc_i_old, acc_i_new))
 
     return acc
 
@@ -574,8 +587,14 @@ def fscil(model,
     # acc list for print
     acc_list = []
     acc_list_train = []
-    acc = test_session(cfg, model_finetune, distributed, test_feat, test_label,
-                       logger, 1, 0, inc_start, inc_start)
+    session_results = []  # 세션별 결과를 저장할 리스트
+    
+    # 첫 번째 세션 평가
+    result = test_session(cfg, model_finetune, distributed, test_feat, test_label,
+                       logger, 1, 0, inc_start, inc_start, save_results=True)
+    session_results.append(result)
+    acc_list.append(result['acc'])
+    
     acc_train = test_session(cfg,
                              model_finetune,
                              distributed,
@@ -587,8 +606,8 @@ def fscil(model,
                              inc_start,
                              inc_start,
                              mode='train')
-    acc_list.append(acc)
     acc_list_train.append(acc_train)
+    
     logger.info("Start to execute the incremental sessions.")
     logger.info(f"Prototypes features shape: {proto_memory.shape}.")
     logger.info(f"Incremental features shape: {inc_feat.shape}.")
@@ -774,7 +793,7 @@ def fscil(model,
                         cur_session_feats[cur_session_labels == idx].mean(
                             dim=0, keepdim=True))
                 cls_feat = torch.cat(cls_feat)
-                acc = test_session_feat(cfg,
+                result = test_session_feat(cfg,
                                         model_finetune,
                                         distributed,
                                         test_feat,
@@ -786,10 +805,14 @@ def fscil(model,
                                         label_end,
                                         inc_start,
                                         mode='test')
+                acc = result
             else:
-                acc = test_session(cfg, model_finetune, distributed, test_feat,
+                result = test_session(cfg, model_finetune, distributed, test_feat,
                                    test_label, logger, i + 2, 0, label_end,
-                                   inc_start)
+                                   inc_start, save_results=True)
+                session_results.append(result)
+                acc = result['acc']
+                
                 acc_train = test_session(cfg,
                                          model_finetune,
                                          distributed,
@@ -801,12 +824,25 @@ def fscil(model,
                                          label_end,
                                          inc_start,
                                          mode='train')
-        acc_list.append(acc)
-        acc_list_train.append(acc_train)
-        save_checkpoint(
-            model_finetune,
-            os.path.join(cfg.work_dir, 'session_{}.pth'.format(i + 1)))
+            acc_list.append(acc)
+            acc_list_train.append(acc_train)
+            save_checkpoint(
+                model_finetune,
+                os.path.join(cfg.work_dir, 'session_{}.pth'.format(i + 1)))
+    
+    # 모든 세션의 결과를 한 번에 출력
+    logger.info("\n=== Final Evaluation Results for All Sessions ===")
+    for result in session_results:
+        logger.info(
+            "[{:02d}]Evaluation results : acc : {:.2f} ; acc_base : {:.2f} ; acc_inc : {:.2f}"
+            .format(result['session'], result['acc'], result['acc_base'], result['acc_inc']))
+        logger.info(
+            "[{:02d}]Evaluation results : acc_incremental_old : {:.2f} ; acc_incremental_new : {:.2f}"
+            .format(result['session'], result['acc_incremental_old'], result['acc_incremental_new']))
+    
+    # 전체 정확도 리스트 출력
     acc_str = ""
     for acc in acc_list:
         acc_str += "{:.2f} ".format(acc)
+    logger.info("\n=== Accuracy Progression Across Sessions ===")
     logger.info(acc_str)

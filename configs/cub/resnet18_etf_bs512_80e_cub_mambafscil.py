@@ -42,8 +42,18 @@ meta_keys = ('filename', 'ori_filename', 'ori_shape', 'img_shape', 'flip',
 train_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(type='RandomResizedCrop', size=img_size),
-    dict(type='RandomFlip', flip_prob=0.5, direction='horizontal'),
-    dict(type='ColorJitter', brightness=0.3, contrast=0.3, saturation=0.3),
+    dict(type='PatchWiseAugment',
+         patch_size=3,
+         prob=0.5,
+         augmentations=[
+             dict(type='ColorJitter',
+                  brightness=0.3,
+                  contrast=0.3,
+                  saturation=0.3),
+             dict(type='RandomFlip',
+                  flip_prob=0.5,
+                  direction='horizontal'),
+         ]),
     dict(type='Normalize', **img_norm_cfg),
     dict(type='ImageToTensor', keys=['img']),
     dict(type='ToTensor', keys=['gt_label']),
@@ -59,7 +69,7 @@ test_pipeline = [
     dict(type='Collect', keys=['img', 'gt_label'], meta_keys=meta_keys)
 ]
 
-data = dict(samples_per_gpu=256,
+data = dict(samples_per_gpu=64,
             workers_per_gpu=4,
             train_dataloader=dict(persistent_workers=True, ),
             val_dataloader=dict(persistent_workers=True, ),

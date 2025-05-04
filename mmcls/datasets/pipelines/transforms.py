@@ -8,9 +8,13 @@ from typing import Sequence
 
 import mmcv
 import numpy as np
+import torch
+import logging
+from mmcv.parallel import DataContainer as DC
 
 from ..builder import PIPELINES
 from .compose import Compose
+from mmcv.utils import build_from_cfg
 
 try:
     import albumentations
@@ -1133,4 +1137,99 @@ class Albu(object):
 
     def __repr__(self):
         repr_str = self.__class__.__name__ + f'(transforms={self.transforms})'
+        return repr_str
+
+
+@PIPELINES.register_module()
+class PatchWiseAugment(object):
+    """Apply augmentation on patches of the image using CPU.
+    
+    Args:
+        patch_size (int): Size of each patch (H, W).
+        augmentations (list[dict]): List of augmentation configs to apply on patches.
+        prob (float): Probability of applying augmentation to each patch.
+    """
+    def __init__(self, patch_size, augmentations, prob=0.5):
+        self.patch_size = patch_size
+        self.prob = prob
+        self.augmentations = [build_from_cfg(aug, PIPELINES) for aug in augmentations]
+        self.logger = logging.getLogger('mmcls')
+        self.total_images_processed = 0
+    
+    def _split_into_patches(self, img):
+        """Split image into patches."""
+        if isinstance(img, DC):
+            img = img.data
+            
+        H, W = img.shape[:2]
+        patch_h = H // self.patch_size
+        patch_w = W // self.patch_size
+        
+        patches = []
+        for i in range(self.patch_size):
+            for j in range(self.patch_size):
+                y1 = i * patch_h
+                y2 = (i + 1) * patch_h
+                x1 = j * patch_w
+                x2 = (j + 1) * patch_w
+                patch = img[y1:y2, x1:x2]
+                patches.append(patch)
+                
+        return patches
+    
+    def _merge_patches(self, patches, original_shape):
+        """Merge patches back to image."""
+        H, W = original_shape[:2]
+        patch_h = H // self.patch_size
+        patch_w = W // self.patch_size
+        
+        merged = np.zeros(original_shape, dtype=patches[0].dtype)
+        idx = 0
+        
+        for i in range(self.patch_size):
+            for j in range(self.patch_size):
+                y1 = i * patch_h
+                y2 = (i + 1) * patch_h
+                x1 = j * patch_w
+                x2 = (j + 1) * patch_w
+                merged[y1:y2, x1:x2] = patches[idx]
+                idx += 1
+                
+        return merged
+    
+    def __call__(self, results):
+        """Apply augmentation to image patches."""
+        img = results['img']
+        original_shape = img.shape
+        
+        # Split into patches
+        patches = self._split_into_patches(img)
+        num_patches = len(patches)
+        
+        # Apply augmentations
+        for i in range(num_patches):
+            if np.random.rand() < self.prob:
+                for aug in self.augmentations:
+                    patches[i] = aug({'img': patches[i]})['img']
+        
+        # Merge patches
+        img = self._merge_patches(patches, original_shape)
+        
+        # Update results
+        if isinstance(results['img'], DC):
+            results['img'] = DC(img, stack=True)
+        else:
+            results['img'] = img
+        
+        self.total_images_processed += 1
+        if self.total_images_processed % 100 == 0:
+            self.logger.info(f'Patch-wise augmentation progress: {self.total_images_processed} images processed')
+        
+        return results
+    
+    def __repr__(self):
+        repr_str = self.__class__.__name__
+        repr_str += f'(patch_size={self.patch_size}, '
+        repr_str += f'prob={self.prob}, '
+        repr_str += f'augmentations={self.augmentations})'
         return repr_str

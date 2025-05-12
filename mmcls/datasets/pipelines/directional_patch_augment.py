@@ -30,12 +30,12 @@ class DirectionalPatchAugment:
         if self.visualize:
             mmcv.mkdir_or_exist(self.vis_dir)
             
-        # 방향별 증강 속성 정의
+        # 방향별 증강 속성 정의 (SS2D와 일치)
         self.directions = {
-            'SE': {'attr': 'saturation', 'range': (1.0, 1.0 + strength)},  # ↘
-            'NE': {'attr': 'contrast', 'range': (1.0, 1.0 + strength)},    # ↗
-            'SW': {'attr': 'brightness', 'range': (1.0, 1.0 + strength)},  # ↙
-            'NW': {'attr': 'blur', 'range': (0, int(3 * strength))}        # ↖
+            'h': {'attr': 'saturation', 'range': (1.0, 1.0 + strength)},      # →
+            'h_flip': {'attr': 'contrast', 'range': (1.0, 1.0 + strength)},   # ←
+            'v': {'attr': 'brightness', 'range': (1.0, 1.0 + strength)},      # ↓
+            'v_flip': {'attr': 'blur', 'range': (0, int(3 * strength))}       # ↑
         }
         
     def _get_patches(self, img, direction):
@@ -44,22 +44,42 @@ class DirectionalPatchAugment:
         patches = []
         positions = []
         
-        if direction in ['SE', 'NE']:  # 왼쪽에서 오른쪽
-            w_range = range(0, W - self.patch_size + 1, self.patch_size)
-        else:  # 오른쪽에서 왼쪽
-            w_range = range(W - self.patch_size, -1, -self.patch_size)
-            
-        if direction in ['SE', 'SW']:  # 위에서 아래
-            h_range = range(0, H - self.patch_size + 1, self.patch_size)
-        else:  # 아래에서 위
-            h_range = range(H - self.patch_size, -1, -self.patch_size)
-            
-        for h in h_range:
-            for w in w_range:
-                patch = img[h:h+self.patch_size, w:w+self.patch_size].copy()
-                patches.append(patch)
-                positions.append((h, w))
-                
+        if direction == 'h':  # →
+            # 왼쪽에서 오른쪽으로, 위에서 아래로 순차적으로 스캔
+            for h in range(0, H - self.patch_size + 1, self.patch_size):
+                for w in range(0, W - self.patch_size + 1, self.patch_size):
+                    patch = img[h:h+self.patch_size, w:w+self.patch_size].copy()
+                    patches.append(patch)
+                    positions.append((h, w))
+                    
+        elif direction == 'h_flip':  # ←
+            # h와 동일한 순서로 스캔하되, 패치 순서를 뒤집음
+            for h in range(0, H - self.patch_size + 1, self.patch_size):
+                for w in range(0, W - self.patch_size + 1, self.patch_size):
+                    patch = img[h:h+self.patch_size, w:w+self.patch_size].copy()
+                    patches.append(patch)
+                    positions.append((h, w))
+            patches.reverse()
+            positions.reverse()
+                    
+        elif direction == 'v':  # ↓
+            # 열 단위로 스캔 (너비를 먼저 순회)
+            for w in range(0, W - self.patch_size + 1, self.patch_size):
+                for h in range(0, H - self.patch_size + 1, self.patch_size):
+                    patch = img[h:h+self.patch_size, w:w+self.patch_size].copy()
+                    patches.append(patch)
+                    positions.append((h, w))
+                    
+        else:  # v_flip: ↑
+            # v와 동일한 순서로 스캔하되, 패치 순서를 뒤집음
+            for w in range(0, W - self.patch_size + 1, self.patch_size):
+                for h in range(0, H - self.patch_size + 1, self.patch_size):
+                    patch = img[h:h+self.patch_size, w:w+self.patch_size].copy()
+                    patches.append(patch)
+                    positions.append((h, w))
+            patches.reverse()
+            positions.reverse()
+                    
         return patches, positions
         
     def _apply_transform(self, patch, attr, value):
@@ -111,7 +131,7 @@ class DirectionalPatchAugment:
             
             # 방향 표시 추가
             arrows = {
-                'SE': '↘', 'NE': '↗', 'SW': '↙', 'NW': '↖'
+                'h': '→', 'h_flip': '←', 'v': '↓', 'v_flip': '↑'
             }
             for i, (direction, info) in enumerate(self.directions.items()):
                 text = f"{arrows[direction]} {info['attr']}"

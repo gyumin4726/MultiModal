@@ -10,6 +10,19 @@ import mmcv
 class DirectionalPatchAugment:
     """Direction-aware patch augmentation for Vision Mamba.
     
+    This augmentation applies different transformations to image patches based on
+    scanning directions used in SS2D:
+    - h (→): horizontal scanning from left to right
+    - h_flip (←): horizontal scanning from right to left
+    - v (↓): vertical scanning from top to bottom
+    - v_flip (↑): vertical scanning from bottom to top
+    
+    Each direction applies a different type of transformation:
+    - h: saturation adjustment
+    - h_flip: contrast adjustment
+    - v: brightness adjustment
+    - v_flip: blur effect
+    
     Args:
         patch_size (int): Size of each patch
         strength (float): Overall strength of augmentations

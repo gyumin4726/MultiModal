@@ -17,6 +17,7 @@ from mmcv.parallel import DataContainer as DC
 from ..builder import PIPELINES
 from .compose import Compose
 from mmcv.utils import build_from_cfg
+from .directional_patch_augment import DirectionalPatchAugment
 
 try:
     import albumentations

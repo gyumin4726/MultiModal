@@ -3,6 +3,8 @@ import copy
 import inspect
 import math
 import random
+import cv2
+import os.path as osp
 from numbers import Number
 from typing import Sequence
 
@@ -1145,75 +1147,174 @@ class PatchWiseAugment(object):
     """Apply augmentation on patches of the image using CPU.
     
     Args:
-        patch_size (int): Size of each patch (H, W).
+        patch_size (int): Size of each patch (H, W). Should match V-Mamba's feat_size.
         augmentations (list[dict]): List of augmentation configs to apply on patches.
         prob (float): Probability of applying augmentation to each patch.
+        visualize (bool): Whether to save visualization of augmented patches.
+        vis_dir (str): Directory to save visualizations.
+        sequential_prob (float): Probability of applying sequential augmentation.
+        maintain_order (bool): Whether to maintain patch order for V-Mamba.
+        max_seq_length (int): Maximum sequence length for sequential augmentation.
     """
-    def __init__(self, patch_size, augmentations, prob=0.5):
+    def __init__(self, 
+                 patch_size, 
+                 augmentations, 
+                 prob=0.5, 
+                 visualize=False, 
+                 vis_dir='work_dirs/patch_vis',
+                 sequential_prob=0.5,
+                 maintain_order=True,
+                 max_seq_length=4):
         self.patch_size = patch_size
         self.prob = prob
+        self.sequential_prob = sequential_prob
+        self.maintain_order = maintain_order
+        self.max_seq_length = max_seq_length
         self.augmentations = [build_from_cfg(aug, PIPELINES) for aug in augmentations]
         self.logger = logging.getLogger('mmcls')
         self.total_images_processed = 0
+        self.visualize = visualize
+        self.vis_dir = vis_dir
+        if self.visualize:
+            mmcv.mkdir_or_exist(self.vis_dir)
     
     def _split_into_patches(self, img):
-        """Split image into patches."""
-        if isinstance(img, DC):
-            img = img.data
-            
+        """Split image into patches with padding if needed."""
         H, W = img.shape[:2]
-        patch_h = H // self.patch_size
-        patch_w = W // self.patch_size
+        
+        # Calculate number of patches in each dimension
+        n_patches_h = H // self.patch_size
+        n_patches_w = W // self.patch_size
+        
+        # Calculate padding
+        pad_h = (n_patches_h + 1) * self.patch_size - H if H % self.patch_size != 0 else 0
+        pad_w = (n_patches_w + 1) * self.patch_size - W if W % self.patch_size != 0 else 0
+        
+        # Pad image if needed
+        if pad_h > 0 or pad_w > 0:
+            img = np.pad(img, 
+                        ((0, pad_h), (0, pad_w), (0, 0)), 
+                        mode='reflect')
+            
+        # Update dimensions after padding
+        H_pad, W_pad = img.shape[:2]
+        n_patches_h = H_pad // self.patch_size
+        n_patches_w = W_pad // self.patch_size
         
         patches = []
-        for i in range(self.patch_size):
-            for j in range(self.patch_size):
-                y1 = i * patch_h
-                y2 = (i + 1) * patch_h
-                x1 = j * patch_w
-                x2 = (j + 1) * patch_w
-                patch = img[y1:y2, x1:x2]
-                patches.append(patch)
+        patch_positions = []
+        
+        # Extract patches in sequential order
+        for i in range(n_patches_h):
+            for j in range(n_patches_w):
+                y1 = i * self.patch_size
+                x1 = j * self.patch_size
+                y2 = y1 + self.patch_size
+                x2 = x1 + self.patch_size
                 
-        return patches
+                patch = img[y1:y2, x1:x2].copy()
+                patches.append(patch)
+                patch_positions.append((y1, x1, y2, x2))
+        
+        return patches, patch_positions, (pad_h, pad_w)
     
-    def _merge_patches(self, patches, original_shape):
-        """Merge patches back to image."""
+    def _merge_patches(self, patches, original_shape, padding):
+        """Merge patches back to image and remove padding if added."""
         H, W = original_shape[:2]
-        patch_h = H // self.patch_size
-        patch_w = W // self.patch_size
+        pad_h, pad_w = padding
         
-        merged = np.zeros(original_shape, dtype=patches[0].dtype)
+        # Calculate padded dimensions
+        H_pad = H + pad_h
+        W_pad = W + pad_w
+        
+        merged = np.zeros((H_pad, W_pad, original_shape[2]), dtype=patches[0].dtype)
+        
+        n_patches_h = H_pad // self.patch_size
+        n_patches_w = W_pad // self.patch_size
+        
+        # Merge patches in sequential order
         idx = 0
-        
-        for i in range(self.patch_size):
-            for j in range(self.patch_size):
-                y1 = i * patch_h
-                y2 = (i + 1) * patch_h
-                x1 = j * patch_w
-                x2 = (j + 1) * patch_w
+        for i in range(n_patches_h):
+            for j in range(n_patches_w):
+                y1 = i * self.patch_size
+                x1 = j * self.patch_size
+                y2 = y1 + self.patch_size
+                x2 = x1 + self.patch_size
+                
                 merged[y1:y2, x1:x2] = patches[idx]
                 idx += 1
-                
+        
+        # Remove padding
+        merged = merged[:H, :W]
         return merged
+    
+    def _apply_sequential_augmentation(self, patches):
+        """Apply augmentations sequentially to maintain temporal relationships."""
+        if np.random.rand() < self.sequential_prob:
+            # 2에서 max_seq_length 사이의 값으로 제한
+            seq_length = np.random.randint(2, min(self.max_seq_length + 1, len(patches) + 1))
+            for i in range(0, len(patches), seq_length):
+                if np.random.rand() < self.prob:
+                    aug = np.random.choice(self.augmentations)
+                    for j in range(i, min(i + seq_length, len(patches))):
+                        patches[j] = aug({'img': patches[j]})['img']
+        return patches
+    
+    def _visualize_patches(self, original_img, augmented_patches, patch_positions, img_id):
+        """Visualize original and augmented patches side by side."""
+        if img_id % 1000 == 0:  # 1000개 단위로만 시각화 및 로깅
+            H, W = original_img.shape[:2]
+            vis_img = np.zeros((H * 2, W, 3), dtype=np.uint8)
+            
+            # Original image on top
+            vis_img[:H] = original_img
+            
+            # Augmented patches on bottom
+            bottom_img = original_img.copy()
+            for patch, (y1, x1, y2, x2) in zip(augmented_patches, patch_positions):
+                bottom_img[y1:y2, x1:x2] = patch
+                # Draw patch boundaries
+                cv2.rectangle(bottom_img, (x1, y1), (x2, y2), (0, 255, 0), 1)
+            
+            vis_img[H:] = bottom_img
+            
+            # Add text labels
+            cv2.putText(vis_img, 'Original', (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+            cv2.putText(vis_img, 'Augmented Patches', (10, H + 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+            
+            # Save visualization
+            save_path = osp.join(self.vis_dir, f'patch_aug_{img_id}.jpg')
+            mmcv.imwrite(vis_img, save_path)
+            self.logger.info(f'Saved patch visualization to {save_path}')
     
     def __call__(self, results):
         """Apply augmentation to image patches."""
         img = results['img']
         original_shape = img.shape
         
+        # Keep original image for visualization
+        original_img = img.copy() if self.visualize else None
+        
         # Split into patches
-        patches = self._split_into_patches(img)
-        num_patches = len(patches)
+        patches, patch_positions, padding = self._split_into_patches(img)
         
         # Apply augmentations
-        for i in range(num_patches):
-            if np.random.rand() < self.prob:
-                for aug in self.augmentations:
-                    patches[i] = aug({'img': patches[i]})['img']
+        if self.maintain_order:
+            # Sequential augmentation for V-Mamba
+            patches = self._apply_sequential_augmentation(patches)
+        else:
+            # Independent augmentation for each patch
+            for i in range(len(patches)):
+                if np.random.rand() < self.prob:
+                    for aug in self.augmentations:
+                        patches[i] = aug({'img': patches[i]})['img']
         
         # Merge patches
-        img = self._merge_patches(patches, original_shape)
+        img = self._merge_patches(patches, original_shape, padding)
+        
+        # Visualize if enabled
+        if self.visualize:
+            self._visualize_patches(original_img, patches, patch_positions, self.total_images_processed)
         
         # Update results
         if isinstance(results['img'], DC):
@@ -1222,7 +1323,7 @@ class PatchWiseAugment(object):
             results['img'] = img
         
         self.total_images_processed += 1
-        if self.total_images_processed % 100 == 0:
+        if self.total_images_processed % 1000 == 0:  # 1000개 단위로 수정
             self.logger.info(f'Patch-wise augmentation progress: {self.total_images_processed} images processed')
         
         return results
@@ -1231,5 +1332,6 @@ class PatchWiseAugment(object):
         repr_str = self.__class__.__name__
         repr_str += f'(patch_size={self.patch_size}, '
         repr_str += f'prob={self.prob}, '
-        repr_str += f'augmentations={self.augmentations})'
+        repr_str += f'augmentations={self.augmentations}, '
+        repr_str += f'visualize={self.visualize})'
         return repr_str

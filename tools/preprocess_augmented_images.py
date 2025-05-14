@@ -32,22 +32,14 @@ def preprocess_and_save_augmented_images(config_file, output_dir):
     # 데이터셋 생성
     dataset = build_dataset(cfg.data.train.dataset)
     
-    # 원본 이미지 수 계산
-    original_counts = {}
-    for idx in range(len(dataset)):
-        results = dataset[idx]
-        class_name = os.path.basename(os.path.dirname(results['img_info']['filename']))
-        original_counts[class_name] = original_counts.get(class_name, 0) + 1
+    # 데이터셋 정보 출력
+    print(f'Total number of images in dataset: {len(dataset)}')
     
-    print('\nOriginal images per class:')
-    for class_name, count in sorted(original_counts.items()):
-        print(f'{class_name}: {count}')
     
     # 출력 디렉토리 생성
     mmcv.mkdir_or_exist(output_dir)
     
     # 각 이미지에 대해 증강 적용
-    augmented_counts = {}
     for idx in range(len(dataset)):
         # 이미지 로드 및 증강
         results = dataset[idx]
@@ -71,19 +63,9 @@ def preprocess_and_save_augmented_images(config_file, output_dir):
         
         # 이미지 저장
         mmcv.imwrite(img, save_path)
-        augmented_counts[class_name] = augmented_counts.get(class_name, 0) + 1
         
         if idx % 100 == 0:
             print(f'Processed {idx}/{len(dataset)} images')
-    
-    # 증강된 이미지 수 출력 및 비교
-    print('\nAugmented images per class:')
-    print('Class name: Original -> Augmented (Difference)')
-    for class_name in sorted(original_counts.keys()):
-        orig_count = original_counts[class_name]
-        aug_count = augmented_counts.get(class_name, 0)
-        diff = orig_count - aug_count
-        print(f'{class_name}: {orig_count} -> {aug_count} ({diff:+d})')
 
 if __name__ == '__main__':
     config_file = 'configs/cub/resnet18_etf_bs512_80e_cub_mambafscil.py'

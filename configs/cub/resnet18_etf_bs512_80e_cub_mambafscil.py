@@ -40,14 +40,10 @@ meta_keys = ('filename', 'ori_filename', 'ori_shape', 'img_shape', 'flip',
              'flip_direction', 'img_norm_cfg', 'cls_id', 'img_id')
 
 train_pipeline = [
-    dict(type='LoadImageFromFile'),
+    dict(type='LoadAugmentedImage',
+         aug_dir='data/CUB_200_2011/augmented_images'),
     dict(type='Resize', size=(_img_resize_size, _img_resize_size)),
     dict(type='CenterCrop', crop_size=img_size),
-    dict(type='DirectionalPatchAugment',
-         patch_size=7,
-         strength=0.5,
-         visualize=True,
-         vis_dir='work_dirs/directional_vis'),
     dict(type='Normalize', **img_norm_cfg),
     dict(type='ImageToTensor', keys=['img']),
     dict(type='ToTensor', keys=['gt_label']),

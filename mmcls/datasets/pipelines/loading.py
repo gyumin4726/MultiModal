@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import os
 import os.path as osp
 
 import mmcv
@@ -68,4 +69,39 @@ class LoadImageFromFile(object):
                     f'to_float32={self.to_float32}, '
                     f"color_type='{self.color_type}', "
                     f'file_client_args={self.file_client_args})')
+        return repr_str
+
+
+@PIPELINES.register_module()
+class LoadAugmentedImage:
+    """미리 증강된 이미지를 로드합니다.
+    
+    Args:
+        aug_dir (str): 증강된 이미지가 저장된 디렉토리 경로
+    """
+    def __init__(self, aug_dir):
+        self.aug_dir = aug_dir
+        
+    def __call__(self, results):
+        """증강된 이미지를 로드합니다."""
+        # 원본 이미지 경로에서 클래스 정보 추출
+        original_path = results['img_info']['filename']
+        class_name = os.path.basename(os.path.dirname(original_path))
+        image_name = os.path.basename(original_path)
+        
+        # 증강된 이미지 경로
+        aug_path = os.path.join(self.aug_dir, class_name, image_name)
+        
+        if os.path.exists(aug_path):
+            # 증강된 이미지가 있으면 로드
+            results['img'] = mmcv.imread(aug_path)
+        else:
+            # 증강된 이미지가 없으면 원본 이미지 사용
+            pass
+            
+        return results
+        
+    def __repr__(self):
+        repr_str = self.__class__.__name__
+        repr_str += f'(aug_dir={self.aug_dir})'
         return repr_str

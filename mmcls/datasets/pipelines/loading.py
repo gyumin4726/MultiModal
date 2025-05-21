@@ -105,3 +105,37 @@ class LoadAugmentedImage:
         repr_str = self.__class__.__name__
         repr_str += f'(aug_dir={self.aug_dir})'
         return repr_str
+
+
+@PIPELINES.register_module()
+class LoadRotatedImage:
+    """미리 회전된 이미지만 로드합니다.
+    Args:
+        rot_dir (str): 회전 이미지가 저장된 디렉토리 경로
+    """
+    def __init__(self, rot_dir):
+        self.rot_dir = rot_dir
+
+    def __call__(self, results):
+        # 원본 이미지 경로에서 클래스 정보 추출
+        original_path = results['img_info']['filename']
+        class_name = os.path.basename(os.path.dirname(original_path))
+        image_name = os.path.basename(original_path)
+
+        # 회전 이미지 파일명 패턴 적용
+        if '_rot' not in image_name:
+            # 원본 파일명에서 회전 파일명으로 변환 (예: xxx.jpg -> xxx_rot30.jpg 등)
+            raise FileNotFoundError(f"회전 이미지 파일명에 '_rot'가 포함되어야 합니다: {image_name}")
+
+        rot_path = os.path.join(self.rot_dir, class_name, image_name)
+
+        if os.path.exists(rot_path):
+            results['img'] = mmcv.imread(rot_path)
+        else:
+            raise FileNotFoundError(f"회전 이미지가 존재하지 않습니다: {rot_path}")
+        return results
+
+    def __repr__(self):
+        repr_str = self.__class__.__name__
+        repr_str += f'(rot_dir={self.rot_dir})'
+        return repr_str

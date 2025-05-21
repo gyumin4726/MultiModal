@@ -92,5 +92,5 @@ def preprocess_and_save_augmented_images(config_file, output_dir):
 
 if __name__ == '__main__':
     config_file = 'configs/cub/resnet18_etf_bs512_80e_cub_mambafscil.py'
-    output_dir = 'data/CUB_200_2011/augmented_images'
+    output_dir = 'data/CUB_200_2011/rotated_images'
     preprocess_and_save_augmented_images(config_file, output_dir) 

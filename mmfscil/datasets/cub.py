@@ -678,12 +678,14 @@ class CUBFSCILDataset(Dataset):
         subset: Literal['train', 'test'] = 'train',
         few_cls: Optional[Tuple] = None,
         test_mode: bool = False,
+        ann_file: str = None,
     ):
         self.data_prefix = data_prefix
         assert isinstance(pipeline, list), 'pipeline is type of list'
         self.pipeline = Compose(pipeline)
 
         self.subset = subset
+        self.ann_file = ann_file
 
         if few_cls is not None:
             assert self.subset == 'train'
@@ -712,61 +714,84 @@ class CUBFSCILDataset(Dataset):
     # copy and modify from
     # https://github.com/icoz69/CEC-CVPR2021/blob/3a5d33/dataloader/cub200/cub200.py#L61
     def load_annotations(self):
-        image_file = os.path.join(self.data_prefix, 'images.txt')
-        split_file = os.path.join(self.data_prefix, 'train_test_split.txt')
-        class_file = os.path.join(self.data_prefix, 'image_class_labels.txt')
-        id2image = self.list2dict(mmcv.list_from_file(image_file))
-        id2train = self.list2dict(mmcv.list_from_file(split_file))
-        id2class = self.list2dict(mmcv.list_from_file(class_file))
-        train_idx = []
-        test_idx = []
-        for k in sorted(id2train.keys()):
-            if id2train[k] == '1':
-                train_idx.append(k)
-            else:
-                test_idx.append(k)
-
-        data_infos = []
-        cls_cnt = defaultdict(lambda: 0)
-
-        if self.subset == 'train':
-            for k in train_idx:
-                cls_id = int(id2class[k]) - 1
-                if CLASSES[cls_id] in self.CLASSES:
-                    if self.few_mod and id2image[k].split(
-                            '/')[-1] not in FSCIL_SAMPLES[CLASSES[cls_id]]:
-                        continue
-                    info = {
-                        'img_prefix': osp.join(self.data_prefix, 'images'),
-                        'cls_id': cls_id,
-                        'img_id': cls_cnt[cls_id],
-                        'img_info': {
-                            'filename': id2image[k]
-                        },
-                        'gt_label': np.array(cls_id, dtype=np.int64),
-                    }
-                    cls_cnt[cls_id] += 1
-                    data_infos.append(info)
-
-        elif self.subset == 'test':
-            for k in test_idx:
-                cls_id = int(id2class[k]) - 1
-                if CLASSES[cls_id] in self.CLASSES:
-                    info = {
-                        'img_prefix': osp.join(self.data_prefix, 'images'),
-                        'cls_id': cls_id,
-                        'img_id': cls_cnt[cls_id],
-                        'img_info': {
-                            'filename': id2image[k]
-                        },
-                        'gt_label': np.array(cls_id, dtype=np.int64),
-                    }
-                    cls_cnt[cls_id] += 1
-                    data_infos.append(info)
+        if self.ann_file is not None:
+            with open(self.ann_file, 'r') as f:
+                lines = f.readlines()
+            data_infos = []
+            for line in lines:
+                rel_path = line.strip()
+                class_name = os.path.basename(os.path.dirname(rel_path))
+                if class_name in CLASSES:
+                    cls_id = CLASSES.index(class_name)
+                else:
+                    cls_id = 0
+                info = {
+                    'img_prefix': self.data_prefix,
+                    'cls_id': cls_id,
+                    'img_id': 0,
+                    'img_info': {
+                        'filename': rel_path
+                    },
+                    'gt_label': np.array(cls_id, dtype=np.int64),
+                }
+                data_infos.append(info)
+            return data_infos
         else:
-            raise NotImplementedError
+            image_file = os.path.join(self.data_prefix, 'images.txt')
+            split_file = os.path.join(self.data_prefix, 'train_test_split.txt')
+            class_file = os.path.join(self.data_prefix, 'image_class_labels.txt')
+            id2image = self.list2dict(mmcv.list_from_file(image_file))
+            id2train = self.list2dict(mmcv.list_from_file(split_file))
+            id2class = self.list2dict(mmcv.list_from_file(class_file))
+            train_idx = []
+            test_idx = []
+            for k in sorted(id2train.keys()):
+                if id2train[k] == '1':
+                    train_idx.append(k)
+                else:
+                    test_idx.append(k)
 
-        return data_infos
+            data_infos = []
+            cls_cnt = defaultdict(lambda: 0)
+
+            if self.subset == 'train':
+                for k in train_idx:
+                    cls_id = int(id2class[k]) - 1
+                    if CLASSES[cls_id] in self.CLASSES:
+                        if self.few_mod and id2image[k].split(
+                                '/')[-1] not in FSCIL_SAMPLES[CLASSES[cls_id]]:
+                            continue
+                        info = {
+                            'img_prefix': osp.join(self.data_prefix, 'images'),
+                            'cls_id': cls_id,
+                            'img_id': cls_cnt[cls_id],
+                            'img_info': {
+                                'filename': id2image[k]
+                            },
+                            'gt_label': np.array(cls_id, dtype=np.int64),
+                        }
+                        cls_cnt[cls_id] += 1
+                        data_infos.append(info)
+
+            elif self.subset == 'test':
+                for k in test_idx:
+                    cls_id = int(id2class[k]) - 1
+                    if CLASSES[cls_id] in self.CLASSES:
+                        info = {
+                            'img_prefix': osp.join(self.data_prefix, 'images'),
+                            'cls_id': cls_id,
+                            'img_id': cls_cnt[cls_id],
+                            'img_info': {
+                                'filename': id2image[k]
+                            },
+                            'gt_label': np.array(cls_id, dtype=np.int64),
+                        }
+                        cls_cnt[cls_id] += 1
+                        data_infos.append(info)
+            else:
+                raise NotImplementedError
+
+            return data_infos
 
     @staticmethod
     def get_classes(num_cls):

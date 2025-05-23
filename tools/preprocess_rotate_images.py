@@ -41,7 +41,7 @@ def preprocess_and_save_augmented_images(config_file, output_dir):
     cfg = mmcv.Config.fromfile(config_file)
     
     # 원본 이미지 기준으로 파이프라인 설정
-    angles = [30, 135, 210, 315]
+    angles = [45]
     preprocess_pipeline = [
         dict(type='LoadImageFromFile')
     ]
@@ -60,10 +60,6 @@ def preprocess_and_save_augmented_images(config_file, output_dir):
     # config에서 crop_size, resize_size 가져오기
     crop_size = 224  # 기본값, 필요시 config에서 읽기
     resize_size = 256  # 기본값, 필요시 config에서 읽기
-    if hasattr(cfg, 'img_size'):
-        crop_size = cfg.img_size
-    if hasattr(cfg, '_img_resize_size'):
-        resize_size = cfg._img_resize_size
 
     # 각 이미지에 대해 회전 적용
     for idx in range(len(dataset)):

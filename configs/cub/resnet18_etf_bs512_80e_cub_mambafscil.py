@@ -28,11 +28,9 @@ model = dict(backbone=dict(_delete_=True,
                        eval_classes=100,
                        with_len=False,
                        loss=dict(
-                           type='DRLoss',
-                           loss_weight=1.0,
-                           reg_lambda=0.,
-                           manifold_reg=0.01,  # PINN 매니폴드 정규화 강도
-                           gradient_reg=0.01),  # PINN 그래디언트 정규화 강도
+                            type='DRLoss',
+                            manifold_reg=0.0,   # DRLoss처럼 쓰려면 0.0
+                            gradient_reg=0.0),  # PINN 항 비활성화
                        cal_acc=True),
              mixup=0,
              mixup_prob=0)

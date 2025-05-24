@@ -26,7 +26,14 @@ model = dict(backbone=dict(_delete_=True,
                        in_channels=1024,
                        num_classes=200,
                        eval_classes=100,
-                       with_len=False),
+                       with_len=False,
+                       loss=dict(
+                           type='DRLoss',
+                           loss_weight=1.0,
+                           reg_lambda=0.,
+                           manifold_reg=0.01,  # PINN 매니폴드 정규화 강도
+                           gradient_reg=0.01),  # PINN 그래디언트 정규화 강도
+                       cal_acc=True),
              mixup=0,
              mixup_prob=0)
 

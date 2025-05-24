@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn as nn
+import torch.nn.functional as F
 from mmcv.runner import get_dist_info
 
 from mmcls.models.builder import HEADS, LOSSES
@@ -25,12 +26,28 @@ def generate_random_orthogonal_matrix(feat_in, num_classes):
 @LOSSES.register_module()
 class DRLoss(nn.Module):
 
-    def __init__(self, reduction='mean', loss_weight=1.0, reg_lambda=0.):
+    def __init__(self, reduction='mean', loss_weight=1.0, reg_lambda=0., manifold_reg=0.01, gradient_reg=0.01):
         super().__init__()
 
         self.reduction = reduction
         self.loss_weight = loss_weight
         self.reg_lambda = reg_lambda
+        self.manifold_reg = manifold_reg
+        self.gradient_reg = gradient_reg
+
+    def compute_manifold_regularization(self, feat):
+        """Compute manifold regularization to preserve feature space structure."""
+        feat.requires_grad_(True)
+        grad_feat = torch.autograd.grad(feat.sum(), feat, create_graph=True)[0]
+        laplacian = torch.sum(torch.norm(grad_feat, p=2, dim=1))
+        return laplacian
+
+    def compute_gradient_preservation(self, feat, target):
+        """Compute gradient preservation term to maintain class relationships."""
+        cos_sim = F.cosine_similarity(feat.unsqueeze(1), feat.unsqueeze(0), dim=-1)
+        target_sim = F.cosine_similarity(target.unsqueeze(1), target.unsqueeze(0), dim=-1)
+        gradient_loss = F.mse_loss(cos_sim, target_sim)
+        return gradient_loss
 
     def forward(
         self,
@@ -47,9 +64,19 @@ class DRLoss(nn.Module):
         if m_norm2 is None:
             m_norm2 = torch.ones_like(dot)
 
-        loss = 0.5 * torch.mean(((dot - (m_norm2 * h_norm2))**2) / h_norm2)
+        # 기본 DR Loss
+        base_loss = 0.5 * torch.mean(((dot - (m_norm2 * h_norm2))**2) / h_norm2)
 
-        return loss * self.loss_weight
+        # PINN style 정규화 항들
+        manifold_loss = self.compute_manifold_regularization(feat)
+        gradient_loss = self.compute_gradient_preservation(feat, target)
+
+        # 전체 손실 함수
+        total_loss = (base_loss +
+                     self.manifold_reg * manifold_loss +
+                     self.gradient_reg * gradient_loss)
+
+        return total_loss * self.loss_weight
 
 
 @HEADS.register_module()

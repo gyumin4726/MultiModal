@@ -265,7 +265,7 @@ bash train_cub.sh
 ## DPWA: Directional Patch-Wise Augmentation
 
 ### 개요
-**DPWA (Directional Patch-Wise Augmentation)** 는 Mamba/SSM의 4방향 스캐닝 패턴에 맞춰 설계된 혁신적인 데이터 증강 기법입니다. 이미지를 패치 단위로 분할하고 각 방향별로 서로 다른 증강 효과를 적용하여 SSM의 방향성 특성을 극대화합니다.
+**DPWA (Directional Patch-Wise Augmentation)**는 Mamba/SSM의 4방향 스캐닝 패턴에 맞춰 설계된 혁신적인 데이터 증강 기법입니다. 이미지를 패치 단위로 분할하고 각 방향별로 서로 다른 증강 효과를 적용하여 SSM의 방향성 특성을 극대화합니다.
 
 ## DPWA의 핵심 특징
 
@@ -345,4 +345,196 @@ dict(type='DirectionalPatchAugment',
 ### **DPWA의 학술적 기여**
 - **방향성 증강**: SSM의 4방향 스캐닝에 특화된 최초의 데이터 증강 기법
 - **아키텍처 정렬**: Mamba/SSM 구조와 완벽하게 정렬된 패치 기반 처리
-- **성능 향상**: 방향별 특화 학습을 통한 FSCIL 성능 개선 
+- **성능 향상**: 방향별 특화 학습을 통한 FSCIL 성능 개선
+
+## MASAC 아키텍처 다이어그램
+
+```
+                    MASAC (Multi-Scale Attention Skip Connections) Architecture
+                    ═══════════════════════════════════════════════════════════
+
+Input Image (224×224)
+        │
+        ▼
+┌─────────────────┐
+│   ResNet-18     │
+│   Backbone      │
+└─────────────────┘
+        │
+        ├─── Layer1 (64ch, 56×56)  ──┐
+        │                            │
+        ├─── Layer2 (128ch, 28×28) ──┼─── Multi-Scale Features
+        │                            │
+        ├─── Layer3 (256ch, 14×14) ──┘
+        │
+        ▼
+    Layer4 (512ch, 7×7)
+        │
+        ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           MASAC Processing Unit                             │
+│                                                                             │
+│  ┌─────────────────┐    ┌──────────────────────────────────────────────┐   │
+│  │   Identity      │    │           Multi-Scale Adapters              │   │
+│  │   Projection    │    │                                              │   │
+│  │                 │    │  ┌─────────┐  ┌─────────┐  ┌─────────┐      │   │
+│  │ 512ch → 1024ch  │    │  │ Layer1  │  │ Layer2  │  │ Layer3  │      │   │
+│  │                 │    │  │Adapter  │  │Adapter  │  │Adapter  │      │   │
+│  │ AvgPool(7×7→1×1)│    │  │64→1024ch│  │128→1024ch│ │256→1024ch│     │   │
+│  └─────────────────┘    │  └─────────┘  └─────────┘  └─────────┘      │   │
+│           │              │       │           │           │             │   │
+│           │              └───────┼───────────┼───────────┼─────────────┘   │
+│           │                      │           │           │                 │
+│           ▼                      ▼           ▼           ▼                 │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                    Skip Features Collection                        │   │
+│  │                                                                     │   │
+│  │    [Identity_Proj, MS_Feat1, MS_Feat2, MS_Feat3, New_Branch*]      │   │
+│  │                              │                                      │   │
+│  └──────────────────────────────┼──────────────────────────────────────┘   │
+│                                 ▼                                          │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                 FSCIL-ASAF (Attention Module)                      │   │
+│  │                                                                     │   │
+│  │    Input: SSM_Output (1024ch)                                      │   │
+│  │           │                                                         │   │
+│  │           ▼                                                         │   │
+│  │    ┌─────────────────┐                                             │   │
+│  │    │ Linear(1024→N)  │  N = num_skip_sources                       │   │
+│  │    └─────────────────┘                                             │   │
+│  │           │                                                         │   │
+│  │           ▼                                                         │   │
+│  │    ┌─────────────────┐                                             │   │
+│  │    │   Softmax(dim=1)│                                             │   │
+│  │    └─────────────────┘                                             │   │
+│  │           │                                                         │   │
+│  │           ▼                                                         │   │
+│  │    [w1, w2, w3, w4, w5*] ← Attention Weights                       │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                 │                                          │
+│                                 ▼                                          │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                    Weighted Skip Fusion                            │   │
+│  │                                                                     │   │
+│  │    Weighted_Skip = Σ(wi × Skip_Feati)                              │   │
+│  │                                                                     │   │
+│  │    Final_Output = SSM_Output + Weighted_Skip                       │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌─────────────────┐
+│   MLP + SSM     │
+│   Processing    │
+│                 │
+│ ┌─────────────┐ │
+│ │ Conv2D+LN+  │ │
+│ │ LeakyReLU   │ │
+│ └─────────────┘ │
+│        │        │
+│        ▼        │
+│ ┌─────────────┐ │
+│ │ Positional  │ │
+│ │ Embedding   │ │
+│ └─────────────┘ │
+│        │        │
+│        ▼        │
+│ ┌─────────────┐ │
+│ │   SS2D      │ │
+│ │ (4-direction│ │
+│ │  scanning)  │ │
+│ └─────────────┘ │
+└─────────────────┘
+        │
+        ▼
+   Final Output (1024ch)
+        │
+        ▼
+┌─────────────────┐
+│    ETF Head     │
+│  (Classification)│
+└─────────────────┘
+
+Legend:
+═══════
+• Identity Projection: 기존 ResNet skip connection 유지
+• Multi-Scale Adapters: Layer1,2,3 특징을 1024ch로 통일
+• FSCIL-ASAF: 동적 어텐션 가중치로 최적 특징 조합 선택
+• New Branch*: 점진적 학습 시에만 활성화
+• SS2D: 4방향(h, h_flip, v, v_flip) 스캐닝 수행
+```
+
+## MASAC vs 기존 방법 비교
+
+```
+기존 Mamba-FSCIL                    MASAC-Enhanced Mamba-FSCIL
+═══════════════════                  ═══════════════════════════
+
+Input                               Input
+  │                                   │
+  ▼                                   ▼
+ResNet-18                           ResNet-18
+  │                                   │
+  └─── Layer4 Only                    ├─── Layer1 ──┐
+       (512ch)                        ├─── Layer2 ──┼─ Multi-Scale
+         │                            ├─── Layer3 ──┘   Features
+         ▼                            └─── Layer4
+    ┌─────────┐                           │
+    │Identity │                           ▼
+    │Proj Only│                    ┌─────────────────┐
+    └─────────┘                    │   MASAC Unit    │
+         │                         │                 │
+         ▼                         │ • Identity Proj │
+    ┌─────────┐                    │ • Multi-Scale   │
+    │   MLP   │                    │   Adapters      │
+    │   +     │                    │ • FSCIL-ASAF    │
+    │  SSM    │                    │   Attention     │
+    └─────────┘                    └─────────────────┘
+         │                                 │
+         ▼                                 ▼
+   Simple Addition:                 Attention Fusion:
+   Output = SSM + Identity          Output = SSM + Σ(wi×Feati)
+
+단점:                                장점:
+• 단일 스케일만 활용                  • 다중 스케일 활용
+• 고정 가중치                        • 동적 어텐션 가중치
+• 제한적 특징 융합                    • 적응적 특징 융합
+```
+
+## Skip Connection 유형별 처리 방식
+
+```
+MASAC Skip Connection Types
+═══════════════════════════
+
+1. 'add' Type (기본)
+   ┌─────────────┐
+   │Skip_Feat1   │──┐
+   ├─────────────┤  │
+   │Skip_Feat2   │──┼── Simple Addition
+   ├─────────────┤  │    Output = SSM + Σ(Feati)
+   │Skip_Feat3   │──┘
+   └─────────────┘
+
+2. 'concat' Type
+   ┌─────────────┐
+   │Skip_Feat1   │──┐
+   ├─────────────┤  │
+   │Skip_Feat2   │──┼── Concatenation
+   ├─────────────┤  │   ┌─────────────┐
+   │Skip_Feat3   │──┘   │Linear Proj  │
+   └─────────────┘      │(Concat→1024)│
+                        └─────────────┘
+
+3. 'attention' Type (FSCIL-ASAF) ⭐ 권장
+   ┌─────────────┐      ┌─────────────┐
+   │Skip_Feat1   │──┐   │Attention    │
+   ├─────────────┤  │   │Weights      │
+   │Skip_Feat2   │──┼──▶│[w1,w2,w3]   │
+   ├─────────────┤  │   │Softmax      │
+   │Skip_Feat3   │──┘   └─────────────┘
+   └─────────────┘             │
+                               ▼
+                        Weighted Fusion:
+                        Σ(wi × Skip_Feati)
+``` 

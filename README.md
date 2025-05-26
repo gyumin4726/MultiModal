@@ -265,7 +265,7 @@ bash train_cub.sh
 ## DPWA: Directional Patch-Wise Augmentation
 
 ### 개요
-**DPWA (Directional Patch-Wise Augmentation)**는 Mamba/SSM의 4방향 스캐닝 패턴에 맞춰 설계된 혁신적인 데이터 증강 기법입니다. 이미지를 패치 단위로 분할하고 각 방향별로 서로 다른 증강 효과를 적용하여 SSM의 방향성 특성을 극대화합니다.
+**DPWA (Directional Patch-Wise Augmentation)** 는 Mamba/SSM의 4방향 스캐닝 패턴에 맞춰 설계된 혁신적인 데이터 증강 기법입니다. 이미지를 패치 단위로 분할하고 각 방향별로 서로 다른 증강 효과를 적용하여 SSM의 방향성 특성을 극대화합니다.
 
 ## DPWA의 핵심 특징
 

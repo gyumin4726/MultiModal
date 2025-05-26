@@ -1,9 +1,9 @@
-# MASAC: Multi-Scale Attention Skip Connections for Mamba-FSCIL
+# MASC-M: Multi-Scale Attention Skip Connections for Mamba-FSCIL
 
-## 새로운 기능: MASAC (Multi-Scale Attention Skip Connections) - 완전 통합 완료
+## 새로운 기능: MASC-M (Multi-Scale Attention Skip Connections for Mamba) - 완전 통합 완료
 
 ### 개요
-기존 Mamba-FSCIL의 **기본 skip connection**을 분석하고, **MASAC (Multi-Scale Attention Skip Connections)**을 새로 도입했습니다. MASAC은 **다중 스케일 특징 추출**과 **어텐션 기반 동적 융합**을 통해 **catastrophic forgetting 완화**와 **새로운 클래스 학습 성능 향상**을 동시에 달성합니다.
+기존 Mamba-FSCIL의 **기본 skip connection**을 분석하고, **MASC-M (Multi-Scale Attention Skip Connections for Mamba)**을 새로 도입했습니다. MASC-M은 **다중 스케일 특징 추출**과 **어텐션 기반 동적 융합**을 통해 **catastrophic forgetting 완화**와 **새로운 클래스 학습 성능 향상**을 동시에 달성합니다.
 
 ## Skip Connection 진화 과정
 
@@ -40,9 +40,9 @@
    - **목적**: 기존 지식과 새로운 지식 융합
    - **범위**: 브랜치 간 특징 결합
 
-### **2단계: MASAC (Multi-Scale Attention Skip Connections) 도입**
+### **2단계: MASC-M (Multi-Scale Attention Skip Connections for Mamba) 도입**
 
-#### MASAC의 핵심 구성 요소:
+#### MASC-M의 핵심 구성 요소:
 
 1. **Multi-Scale Skip Connections**
    ```python
@@ -75,9 +75,9 @@
    - **목적**: 상황에 따라 최적의 특징 조합 자동 선택
    - **효과**: 세션별/클래스별 적응적 특징 융합
 
-### **3단계: MASAC 통합 아키텍처**
+### **3단계: MASC-M 통합 아키텍처**
 
-#### MASAC의 최종 처리 흐름:
+#### MASC-M의 최종 처리 흐름:
 ```python
 # 1. 기존 ResNet skip connections (유지)
 out += self.shortcut(x)
@@ -101,7 +101,7 @@ final_output = x + weighted_skip
 
 ### 기존 vs 새로운 Skip Connection 비교
 
-| 구분 | 기존 Mamba-FSCIL | MASAC-Enhanced Mamba-FSCIL |
+| 구분 | 기존 Mamba-FSCIL | MASC-M-Enhanced Mamba-FSCIL |
 |------|------------------|----------------------|
 | **ResNet 내부** | BasicBlock 단위 skip connection | **유지** + Multi-scale 특징 추출 |
 | **특징 스케일** | Layer4 (512ch, 7×7)만 사용 | **Layer1,2,3,4 모두 활용** |
@@ -167,14 +167,14 @@ bash train_cub.sh
 
 ## 구현 완료 상태
 
-### **MASAC (Multi-Scale Attention Skip Connections) - 완전 통합**
+### **MASC-M (Multi-Scale Attention Skip Connections for Mamba) - 완전 통합**
 
 #### 기존 Skip Connection (유지)
 - [x] ResNet BasicBlock 내부 skip connections
 - [x] MambaNeck residual projection
 - [x] New branch와 기존 branch 결합
 
-#### MASAC 핵심 구성 요소 (완전 구현)
+#### MASC-M 핵심 구성 요소 (완전 구현)
 - [x] **Multi-scale skip connections** (ResNet layer1, layer2, layer3 활용)
 - [x] **Attention-weighted skip connection fusion** (동적 가중치 학습)
 - [x] **차별화된 학습률** 적용 (multi_scale_adapters, skip_attention)
@@ -194,9 +194,9 @@ bash train_cub.sh
 
 ### **새로운 기여점**
 
-1. **MASAC: Mamba/SSM에 Multi-Scale Attention Skip Connection 최초 적용**
+1. **MASC-M: Mamba/SSM에 Multi-Scale Attention Skip Connection 최초 적용**
    - 기존 연구: Multi-scale skip connection은 CNN(FPN, U-Net) 및 Transformer에서만 사용
-   - **우리의 기여**: MASAC을 통해 Mamba/SSM 아키텍처에 multi-scale attention skip connection을 최초로 적용
+   - **우리의 기여**: MASC-M을 통해 Mamba/SSM 아키텍처에 multi-scale attention skip connection을 최초로 적용
    - **혁신성**: SSM의 순차적 특성과 multi-scale 특징의 병렬적 융합을 성공적으로 결합
 
 2. **FSCIL-ASAF: FSCIL에 특화된 Attention-weighted Skip Adaptive Fusion**
@@ -206,7 +206,7 @@ bash train_cub.sh
 
 3. **Mamba-FSCIL 통합 프레임워크**
    - 기존 연구: Skip connection 기법들이 개별적으로 연구됨
-   - **우리의 기여**: MASAC과 FSCIL-ASAF를 Mamba 기반 FSCIL에 통합
+   - **우리의 기여**: MASC-M과 FSCIL-ASAF를 Mamba 기반 FSCIL에 통합
    - **혁신성**: 단일 프레임워크에서 여러 skip connection 기법의 시너지 효과 달성
 
 ### **기존 기법들의 학술적 배경**
@@ -255,7 +255,7 @@ bash train_cub.sh
 
 | 연구 분야 | 기존 연구 | 우리의 기여 |
 |-----------|-----------|-------------|
-| **Multi-Scale** | FPN, U-Net (CNN 기반) | MASAC: Mamba/SSM에 최초 적용 |
+| **Multi-Scale** | FPN, U-Net (CNN 기반) | MASC-M: Mamba/SSM에 최초 적용 |
 | **Attention** | SE-Net, CBAM (일반적) | FSCIL-ASAF: FSCIL 태스크 특화 |
 | **Skip Connection** | ResNet, DenseNet (정적) | 동적 가중치 학습 |
 | **FSCIL** | 기존 CNN/Transformer | Mamba 기반 최초 구현 |
@@ -347,10 +347,10 @@ dict(type='DirectionalPatchAugment',
 - **아키텍처 정렬**: Mamba/SSM 구조와 완벽하게 정렬된 패치 기반 처리
 - **성능 향상**: 방향별 특화 학습을 통한 FSCIL 성능 개선
 
-## MASAC 아키텍처 다이어그램
+## MASC-M 아키텍처 다이어그램
 
 ```
-                    MASAC (Multi-Scale Attention Skip Connections) Architecture
+                    MASC-M (Multi-Scale Attention Skip Connections for Mamba) Architecture
                     ═══════════════════════════════════════════════════════════
 
 Input Image (224×224)
@@ -372,7 +372,7 @@ Input Image (224×224)
         │
         ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                           MASAC Processing Unit                             │
+│                           MASC-M Processing Unit                            │
 │                                                                             │
 │  ┌─────────────────┐    ┌───────────────────────────────────────────────┐   │
 │  │   Identity      │    │           Multi-Scale Adapters                │   │
@@ -464,10 +464,10 @@ Legend:
 • SS2D: 4방향(h, h_flip, v, v_flip) 스캐닝 수행
 ```
 
-## MASAC vs 기존 방법 비교
+## MASC-M vs 기존 방법 비교
 
 ```
-기존 Mamba-FSCIL                    MASAC-Enhanced Mamba-FSCIL
+기존 Mamba-FSCIL                    MASC-M-Enhanced Mamba-FSCIL
 ═══════════════════                  ═══════════════════════════
 
 Input                               Input
@@ -482,7 +482,7 @@ ResNet-18                           ResNet-18
     ┌─────────┐                           │
     │Identity │                           ▼
     │Proj Only│                    ┌─────────────────┐
-    └─────────┘                    │   MASAC Unit    │
+    └─────────┘                    │   MASC-M Unit   │
          │                         │                 │
          ▼                         │ • Identity Proj │
     ┌─────────┐                    │ • Multi-Scale   │
@@ -504,8 +504,8 @@ ResNet-18                           ResNet-18
 ## Skip Connection 유형별 처리 방식
 
 ```
-MASAC Skip Connection Types
-═══════════════════════════
+MASC-M Skip Connection Types
+════════════════════════════
 
 1. 'add' Type (기본)
    ┌─────────────┐

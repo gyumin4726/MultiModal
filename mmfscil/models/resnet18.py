@@ -109,10 +109,12 @@ class ResNet18(nn.Module):
             self.in_planes = planes * block.expansion
         return nn.Sequential(*layers)
 
-    def forward(self, x):
+    def forward(self, x, return_multi_scale=False):
         out = F.relu(self.bn1(self.conv1(x)))
-        out = self.layer1(out)
-        out = self.layer2(out)
-        out = self.layer3(out)
-        out = self.layer4(out)
-        return out
+        layer1_out = self.layer1(out)
+        layer2_out = self.layer2(layer1_out)
+        layer3_out = self.layer3(layer2_out)
+        layer4_out = self.layer4(layer3_out)
+        
+        # Always return multi_scale features to enable enhanced skip connections
+        return layer4_out, [layer1_out, layer2_out, layer3_out]

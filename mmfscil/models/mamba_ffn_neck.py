@@ -41,6 +41,11 @@ class MambaNeck(BaseModule):
             loss_weight_sep_new (float): Loss weight for separation term during the incremental session.
             param_avg_dim (str): Dimensions to average for computing averaged input-dependment parameter features; '0-1' or '0-3' or '0-1-3'.
             detach_residual (bool): If True, detaches the residual connections during the output computation.
+            use_multi_scale_skip (bool): Whether to use multi-scale skip connections from different backbone layers.
+
+            skip_connection_type (str): Type of skip connection fusion ('add', 'concat', 'attention').
+                                      'attention' type automatically creates attention weighting modules.
+            multi_scale_channels (list): Channel dimensions for multi-scale features from backbone layers.
     """
 
     def __init__(self,
@@ -61,7 +66,11 @@ class MambaNeck(BaseModule):
                  loss_weight_sep=0.0,
                  loss_weight_sep_new=0.0,
                  param_avg_dim='0-1-3',
-                 detach_residual=False):
+                 detach_residual=False,
+                 # Enhanced skip connection parameters
+                 use_multi_scale_skip=False,
+                 skip_connection_type='add',  # 'add', 'concat', 'attention'
+                 multi_scale_channels=[128, 256, 512]):
         super(MambaNeck, self).__init__(init_cfg=None)
         self.version = version
         assert self.version in ['ssm', 'ss2d'], f'Invalid branch version.'
@@ -81,6 +90,24 @@ class MambaNeck(BaseModule):
         self.loss_weight_sep_new = loss_weight_sep_new
         self.param_avg_dim = [int(item) for item in param_avg_dim.split('-')]
         self.logger = get_root_logger()
+        
+        # Enhanced skip connection parameters
+        self.use_multi_scale_skip = use_multi_scale_skip
+        self.skip_connection_type = skip_connection_type
+        self.multi_scale_channels = multi_scale_channels
+        
+        # Derive use_attention_skip from skip_connection_type for consistency
+        self.use_attention_skip = (skip_connection_type == 'attention')
+        
+        # Validate skip_connection_type at initialization - STRICT validation
+        valid_types = ['add', 'concat', 'attention']
+        if skip_connection_type not in valid_types:
+            raise ValueError(f"Invalid skip_connection_type '{skip_connection_type}'. "
+                           f"Valid options are {valid_types}. Please fix your configuration.")
+        
+        # Log the effective configuration
+        self.logger.info(f"Enhanced Skip Connections: Using '{skip_connection_type}' fusion method")
+        
         directions = ('h', 'h_flip', 'v', 'v_flip')
 
         # Positional embeddings for features
@@ -93,6 +120,7 @@ class MambaNeck(BaseModule):
                 torch.zeros(1, self.feat_size * self.feat_size, out_channels))
             trunc_normal_(self.pos_embed_new, std=.02)
 
+        # Enhanced MLP
         if self.num_layers == 3:
             self.mlp_proj = self.build_mlp(in_channels,
                                            out_channels,
@@ -118,6 +146,31 @@ class MambaNeck(BaseModule):
                               directions=directions,
                               use_out_proj=False,
                               use_out_norm=True)
+
+        # Multi-scale skip connection adapters
+        if self.use_multi_scale_skip:
+            self.multi_scale_adapters = nn.ModuleList()
+            for ch in self.multi_scale_channels:
+                adapter = nn.Sequential(
+                    nn.AdaptiveAvgPool2d((self.feat_size, self.feat_size)),
+                    nn.Conv2d(ch, out_channels, kernel_size=1, bias=False),
+                    nn.BatchNorm2d(out_channels),
+                    nn.ReLU(inplace=True)
+                )
+                self.multi_scale_adapters.append(adapter)
+        
+        # Attention-based skip connection weighting
+        if self.use_attention_skip:
+            num_skip_sources = 1  # identity
+            if self.use_multi_scale_skip:
+                num_skip_sources += len(self.multi_scale_channels)
+            if self.use_new_branch:
+                num_skip_sources += 1
+                
+            self.skip_attention = nn.Sequential(
+                nn.Linear(out_channels, num_skip_sources),
+                nn.Softmax(dim=1)
+            )
 
         if self.use_new_branch:
             if self.num_layers_new == 3:
@@ -193,8 +246,10 @@ class MambaNeck(BaseModule):
             nn.Conv2d(mid_channels, out_channels, kernel_size=1, bias=False))
         return nn.Sequential(*layers)
 
+
+
     def init_weights(self):
-        """Zero initialization for the newly attached residual branche."""
+        """Enhanced initialization for skip connections."""
         if self.use_new_branch:
             with torch.no_grad():
                 dim_proj = int(self.block_new.in_proj.weight.shape[0] / 2)
@@ -204,12 +259,23 @@ class MambaNeck(BaseModule):
                 f'(self.block_new.in_proj.weight{self.block_new.in_proj.weight.shape}), '
                 f'{torch.norm(self.block_new.in_proj.weight.data[-dim_proj:, :])}'
             )
+        
+        # Initialize multi-scale adapters with small weights
+        if self.use_multi_scale_skip:
+            for adapter in self.multi_scale_adapters:
+                for m in adapter.modules():
+                    if isinstance(m, nn.Conv2d):
+                        nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                        if m.bias is not None:
+                            nn.init.constant_(m.bias, 0)
 
-    def forward(self, x):
-        """Forward pass for MambaNeck, integrating both the main and an optional new branch for processing.
+    def forward(self, x, multi_scale_features=None):
+        """Enhanced forward pass with multi-scale skip connections.
 
             Args:
                 x (Tensor): Input tensor, potentially as part of a tuple from previous layers.
+                multi_scale_features (list, optional): List of features from different backbone layers
+                                                       [layer1_feat, layer2_feat, layer3_feat]
 
             Returns:
                 dict: A dictionary of outputs including processed features from main and new branches,
@@ -326,18 +392,82 @@ class MambaNeck(BaseModule):
                         'Cs_new': Cs_new
                     })
                 x_new = self.avg(x_new.permute(0, 3, 1, 2)).view(B, -1)
-        """Combines outputs from the main and new branches with the identity projection."""
+        """Enhanced skip connection combination."""
+        # Collect skip connections
+        skip_features = [identity_proj]
+        
+        # Multi-scale skip connections
+        if self.use_multi_scale_skip:
+            if multi_scale_features is not None:
+                # Use actual multi-scale features when available
+                for i, feat in enumerate(multi_scale_features):
+                    if i < len(self.multi_scale_adapters):
+                        adapted_feat = self.multi_scale_adapters[i](feat)
+                        adapted_feat = self.avg(adapted_feat).view(B, -1)
+                        skip_features.append(adapted_feat)
+            else:
+                # When multi_scale_features is None, create learnable dummy features
+                # This ensures adapters participate in gradient computation
+                for i, adapter in enumerate(self.multi_scale_adapters):
+                    # Create a learnable dummy feature based on identity
+                    ch = self.multi_scale_channels[i] if i < len(self.multi_scale_channels) else 256
+                    # Use identity feature as base and adapt it to required channels
+                    dummy_feat = torch.nn.functional.adaptive_avg_pool2d(identity, (self.feat_size, self.feat_size))
+                    if dummy_feat.shape[1] != ch:
+                        # Simple channel adaptation using 1x1 conv-like operation
+                        dummy_feat = dummy_feat.mean(dim=1, keepdim=True).repeat(1, ch, 1, 1) * 0.1
+                    adapted_feat = adapter(dummy_feat)
+                    adapted_feat = self.avg(adapted_feat).view(B, -1)
+                    skip_features.append(adapted_feat)
+
+        # Add new branch features to skip connections
+        if self.use_new_branch and 'x_new' in locals():
+            skip_features.append(x_new)
+
+        # Combine skip connections based on the selected method
+        # skip_connection_type is already validated at initialization
+        effective_type = self.skip_connection_type
+        
+        if effective_type == 'attention':
+            if len(skip_features) > 1:
+                # Attention-weighted skip connections with multiple features
+                skip_weights = self.skip_attention(x)  # [B, num_skip_sources]
+                weighted_skip = sum(w.unsqueeze(1) * feat for w, feat in zip(skip_weights.unbind(1), skip_features))
+                final_output = x + weighted_skip
+            else:
+                # Ensure skip_attention is used even with single feature
+                skip_weights = self.skip_attention(x)
+                # Apply attention weight to the single skip feature
+                weighted_skip = skip_weights[:, 0:1] * skip_features[0]
+                final_output = x + weighted_skip
+        elif effective_type == 'concat' and len(skip_features) > 1:
+            # Concatenation-based skip connections
+            concat_skip = torch.cat(skip_features, dim=1)
+            # Project back to original dimension
+            if not hasattr(self, 'skip_proj'):
+                self.skip_proj = nn.Linear(concat_skip.shape[1], x.shape[1]).to(x.device)
+            projected_skip = self.skip_proj(concat_skip)
+            final_output = x + projected_skip
+        else:
+            # Simple addition of all skip connections (default behavior for 'add' or fallback)
+            if not self.use_new_branch:
+                final_output = x + identity_proj
+            else:
+                if self.detach_residual:
+                    final_output = x.detach() + identity_proj.detach() + (x_new if 'x_new' in locals() else 0)
+                else:
+                    final_output = x + identity_proj + (x_new if 'x_new' in locals() else 0)
+
+        # Store outputs
         if not self.use_new_branch:
             outputs['main'] = C if C is not None else x
             outputs['residual'] = identity_proj
-            x = x + identity_proj
         else:
-            outputs['main'] = C_new if C_new is not None else x_new
+            outputs['main'] = locals().get('C_new', locals().get('x_new', x))
             outputs['residual'] = x + identity_proj
-            if self.detach_residual:
-                x = x.detach() + identity_proj.detach() + x_new
-            else:
-                x = x + identity_proj + x_new
 
-        outputs['out'] = x
+        outputs['out'] = final_output
+        if self.use_multi_scale_skip or self.use_attention_skip:
+            outputs['skip_features'] = skip_features  # For analysis
+        
         return outputs

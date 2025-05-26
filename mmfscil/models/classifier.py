@@ -83,8 +83,18 @@ class ImageClassifierCIL(BaseClassifier):
             (f'Invalid output stage "{stage}", please choose from "backbone", '
              '"neck" and "pre_logits"')
 
+        multi_scale_features = None
         if self.backbone:
-            x = self.backbone(img)
+            # ResNet18 now always returns multi_scale features
+            result = self.backbone(img)
+            if isinstance(result, tuple) and len(result) == 2:
+                x, multi_scale_features = result
+            elif isinstance(result, tuple):
+                # Handle other tuple formats (take the last element as main feature)
+                x = result[-1]
+                multi_scale_features = result[:-1] if len(result) > 1 else None
+            else:
+                x = result
         else:
             x = img
 
@@ -94,7 +104,11 @@ class ImageClassifierCIL(BaseClassifier):
             return x
 
         if self.neck:
-            x = self.neck(x)
+            # Always pass multi_scale features to neck for enhanced skip connections
+            if hasattr(self.neck, 'use_multi_scale_skip'):
+                x = self.neck(x, multi_scale_features=multi_scale_features)
+            else:
+                x = self.neck(x)
 
         if stage == 'neck':
             return x

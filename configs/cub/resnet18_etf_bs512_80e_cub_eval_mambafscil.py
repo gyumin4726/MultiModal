@@ -30,7 +30,11 @@ model = dict(backbone=dict(_delete_=True,
                        loss_weight_supp_novel=10,
                        loss_weight_sep=0.001,
                        loss_weight_sep_new=0.001,
-                       param_avg_dim='0-1-3'),
+                       param_avg_dim='0-1-3',
+                       # Enhanced skip connection settings
+                       use_multi_scale_skip=True,
+                       skip_connection_type='attention',  # 'add', 'concat', 'attention'
+                       multi_scale_channels=[64, 128, 256]),  # ResNet18 layer channels
              head=dict(type='ETFHead',
                        in_channels=1024,
                        num_classes=200,
@@ -55,7 +59,11 @@ optimizer = dict(type='SGD',
                          'neck.block.': dict(lr_mult=0.2),
                          'neck.residual_proj': dict(lr_mult=0.2),
                          'neck.pos_embed': dict(lr_mult=0.2),
-                         'neck.pos_embed_new': dict(lr_mult=1)
+                         'neck.pos_embed_new': dict(lr_mult=1),
+                         # Enhanced skip connection components
+                         'neck.multi_scale_adapters': dict(lr_mult=0.5),
+                         'neck.skip_attention': dict(lr_mult=1.0),
+                         'neck.skip_proj': dict(lr_mult=1.0),
                      }))
 
 optimizer_config = dict(grad_clip=None)

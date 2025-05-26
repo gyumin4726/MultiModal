@@ -165,7 +165,7 @@ bash train_cub.sh
 
 ---
 
-## 🎉 구현 완료 상태
+## 구현 완료 상태
 
 ### **MASAC (Multi-Scale Attention Skip Connections) - 완전 통합**
 

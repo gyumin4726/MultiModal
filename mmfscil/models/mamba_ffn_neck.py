@@ -43,8 +43,7 @@ class MambaNeck(BaseModule):
             detach_residual (bool): If True, detaches the residual connections during the output computation.
             use_multi_scale_skip (bool): Whether to use multi-scale skip connections from different backbone layers.
 
-            skip_connection_type (str): Type of skip connection fusion ('add', 'concat', 'attention').
-                                      'attention' type automatically creates attention weighting modules.
+            Note: Always uses attention-based skip connection fusion for optimal performance.
             multi_scale_channels (list): Channel dimensions for multi-scale features from backbone layers.
     """
 
@@ -69,7 +68,6 @@ class MambaNeck(BaseModule):
                  detach_residual=False,
                  # Enhanced skip connection parameters
                  use_multi_scale_skip=False,
-                 skip_connection_type='add',  # 'add', 'concat', 'attention'
                  multi_scale_channels=[128, 256, 512]):
         super(MambaNeck, self).__init__(init_cfg=None)
         self.version = version
@@ -93,20 +91,13 @@ class MambaNeck(BaseModule):
         
         # Enhanced skip connection parameters
         self.use_multi_scale_skip = use_multi_scale_skip
-        self.skip_connection_type = skip_connection_type
         self.multi_scale_channels = multi_scale_channels
         
-        # Derive use_attention_skip from skip_connection_type for consistency
-        self.use_attention_skip = (skip_connection_type == 'attention')
-        
-        # Validate skip_connection_type at initialization - STRICT validation
-        valid_types = ['add', 'concat', 'attention']
-        if skip_connection_type not in valid_types:
-            raise ValueError(f"Invalid skip_connection_type '{skip_connection_type}'. "
-                           f"Valid options are {valid_types}. Please fix your configuration.")
+        # Always use attention-based skip connections for MASC-M
+        self.use_attention_skip = True
         
         # Log the effective configuration
-        self.logger.info(f"Enhanced Skip Connections: Using '{skip_connection_type}' fusion method")
+        self.logger.info(f"Enhanced Skip Connections: Using attention fusion method")
         
         directions = ('h', 'h_flip', 'v', 'v_flip')
 
@@ -159,18 +150,17 @@ class MambaNeck(BaseModule):
                 )
                 self.multi_scale_adapters.append(adapter)
         
-        # Attention-based skip connection weighting
-        if self.use_attention_skip:
-            num_skip_sources = 1  # identity
-            if self.use_multi_scale_skip:
-                num_skip_sources += len(self.multi_scale_channels)
-            if self.use_new_branch:
-                num_skip_sources += 1
-                
-            self.skip_attention = nn.Sequential(
-                nn.Linear(out_channels, num_skip_sources),
-                nn.Softmax(dim=1)
-            )
+        # Attention-based skip connection weighting (always enabled)
+        num_skip_sources = 1  # identity
+        if self.use_multi_scale_skip:
+            num_skip_sources += len(self.multi_scale_channels)
+        if self.use_new_branch:
+            num_skip_sources += 1
+            
+        self.skip_attention = nn.Sequential(
+            nn.Linear(out_channels, num_skip_sources),
+            nn.Softmax(dim=1)
+        )
 
         if self.use_new_branch:
             if self.num_layers_new == 3:
@@ -424,39 +414,18 @@ class MambaNeck(BaseModule):
         if self.use_new_branch and 'x_new' in locals():
             skip_features.append(x_new)
 
-        # Combine skip connections based on the selected method
-        # skip_connection_type is already validated at initialization
-        effective_type = self.skip_connection_type
-        
-        if effective_type == 'attention':
-            if len(skip_features) > 1:
-                # Attention-weighted skip connections with multiple features
-                skip_weights = self.skip_attention(x)  # [B, num_skip_sources]
-                weighted_skip = sum(w.unsqueeze(1) * feat for w, feat in zip(skip_weights.unbind(1), skip_features))
-                final_output = x + weighted_skip
-            else:
-                # Ensure skip_attention is used even with single feature
-                skip_weights = self.skip_attention(x)
-                # Apply attention weight to the single skip feature
-                weighted_skip = skip_weights[:, 0:1] * skip_features[0]
-                final_output = x + weighted_skip
-        elif effective_type == 'concat' and len(skip_features) > 1:
-            # Concatenation-based skip connections
-            concat_skip = torch.cat(skip_features, dim=1)
-            # Project back to original dimension
-            if not hasattr(self, 'skip_proj'):
-                self.skip_proj = nn.Linear(concat_skip.shape[1], x.shape[1]).to(x.device)
-            projected_skip = self.skip_proj(concat_skip)
-            final_output = x + projected_skip
+        # Attention-weighted skip connection fusion (MASC-M)
+        if len(skip_features) > 1:
+            # Attention-weighted skip connections with multiple features
+            skip_weights = self.skip_attention(x)  # [B, num_skip_sources]
+            weighted_skip = sum(w.unsqueeze(1) * feat for w, feat in zip(skip_weights.unbind(1), skip_features))
+            final_output = x + weighted_skip
         else:
-            # Simple addition of all skip connections (default behavior for 'add' or fallback)
-            if not self.use_new_branch:
-                final_output = x + identity_proj
-            else:
-                if self.detach_residual:
-                    final_output = x.detach() + identity_proj.detach() + (x_new if 'x_new' in locals() else 0)
-                else:
-                    final_output = x + identity_proj + (x_new if 'x_new' in locals() else 0)
+            # Ensure skip_attention is used even with single feature
+            skip_weights = self.skip_attention(x)
+            # Apply attention weight to the single skip feature
+            weighted_skip = skip_weights[:, 0:1] * skip_features[0]
+            final_output = x + weighted_skip
 
         # Store outputs
         if not self.use_new_branch:

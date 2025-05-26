@@ -24,7 +24,6 @@ model = dict(backbone=dict(_delete_=True,
                        use_residual_proj=True,
                        # Enhanced skip connection settings
                        use_multi_scale_skip=True,
-                       skip_connection_type='attention',  # 'add', 'concat', 'attention'
                        multi_scale_channels=[64, 128, 256]),  # ResNet18 layer channels
              head=dict(type='ETFHead',
                        in_channels=1024,

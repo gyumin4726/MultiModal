@@ -21,24 +21,30 @@
    - **목적**: 그래디언트 소실 문제 해결
    - **범위**: 동일 해상도 특징 간 연결
 
-2. **MambaNeck의 Residual Connection**
+2. **MambaNeck의 Residual Connection** (MASC-M 이전)
    ```python
-   # MambaNeck에서
+   # MambaNeck에서 - 기본 residual connection
    identity_proj = self.residual_proj(self.avg(identity).view(B, -1))
    final_output = x + identity_proj  # ← 기존 residual connection
+   
+   # 점진적 학습 시 - branch fusion
+   final_output = x + identity_proj + x_new  # ← 기존 branch 결합
    ```
    - **위치**: MambaNeck의 출력 단계
-   - **목적**: 입력 특징 보존
+   - **목적**: 입력 특징 보존 및 브랜치 간 특징 결합
    - **범위**: 전체 특징 맵의 압축된 표현
 
 3. **MLPFFNNeck의 Final Residual Connection**
    ```python
-   # 기존 new branch 사용 시
-   final_output = x + identity_proj + x_new  # ← 기존 branch 결합
+   # MLPFFNNeck에서
+   identity = self.ffn(identity)
+   x = self.ln1(x)  # MLP 처리
+   if self.use_final_residual:
+       x = x + identity  # ← 최종 residual connection
    ```
-   - **위치**: 점진적 학습 시 새로운 브랜치와 결합
-   - **목적**: 기존 지식과 새로운 지식 융합
-   - **범위**: 브랜치 간 특징 결합
+   - **위치**: MLPFFNNeck의 최종 출력 단계
+   - **목적**: MLP 처리 후 입력 특징 보존
+   - **범위**: 최종 특징 표현 안정화
 
 ### **2단계: MASC-M (Multi-Scale Attention Skip Connections for Mamba) 도입**
 
@@ -111,34 +117,40 @@ final_output = x + weighted_skip
 
 ### 기술적 세부사항
 
-#### Skip Connection 유형 (새로 도입)
+#### Skip Connection 유형 (Attention 방식으로 통일)
 ```python
-skip_connection_type = 'attention'  # 'add', 'concat', 'attention'
+# 현재 구현: 항상 attention 방식 사용
+self.use_attention_skip = True  # 고정값
 ```
-- **'add'**: 단순 덧셈 (기존 ResNet 방식과 동일)
-- **'concat'**: 연결 후 선형 변환 (새로운 방식)
-- **'attention'**: 어텐션 가중치 기반 융합  **권장 방식**)
+- **기존 방식들 제거**: 'add', 'concat' 방식은 제거됨
+- **Attention 방식 고정**: FSCIL-ASAF 어텐션 가중치 기반 융합만 사용
+- **성능 최적화**: 가장 효과적인 방식으로 단일화
 
 #### 다중 스케일 채널 설정
 ```python
 multi_scale_channels = [64, 128, 256]  # ResNet18 layer1, layer2, layer3
 ```
 
-#### 학습률 최적화 (실제 적용됨)
+#### 학습률 최적화 (현재 미적용)
 ```python
-paramwise_cfg = dict(
-    custom_keys={
-        'neck.multi_scale_adapters': dict(lr_mult=0.5),  # 적응 레이어
-        'neck.skip_attention': dict(lr_mult=1.0),        # 어텐션 모듈
-        'neck.skip_proj': dict(lr_mult=1.0),             # 투영 레이어
-    }
+# 현재 설정: 기본 backbone 학습률만 조정
+optimizer = dict(
+    paramwise_cfg=dict(custom_keys={'backbone': dict(lr_mult=0.1)})
 )
+
+# TODO: MASC-M 컴포넌트별 차별화된 학습률 적용 필요
+# paramwise_cfg = dict(
+#     custom_keys={
+#         'neck.multi_scale_adapters': dict(lr_mult=0.5),
+#         'neck.skip_attention': dict(lr_mult=1.0),
+#     }
+# )
 ```
 
-#### 분산 훈련 최적화
+#### 분산 훈련 최적화 (현재 미적용)
 ```python
-# 모든 파라미터가 사용되므로 성능 최적화 가능
-find_unused_parameters = False  # 오버헤드 제거
+# TODO: 분산 훈련 최적화 설정 추가 필요
+# find_unused_parameters = False  # 오버헤드 제거
 ```
 
 ### 성능 향상 효과 (검증 완료)
@@ -182,11 +194,13 @@ bash train_cub.sh
 - [x] **분산 훈련 최적화** (`find_unused_parameters=False`)
 - [x] **기존 파이프라인 완전 호환성**
 
-### **성능 최적화 완료**
-- [x] PyTorch DDP unused parameter 경고 해결
-- [x] 그래디언트 흐름 최적화
-- [x] 메모리 오버헤드 최소화
-- [x] 훈련 안정성 검증
+### **성능 최적화 상태**
+- [x] 기본 MASC-M 아키텍처 구현 완료
+- [x] Attention-based skip connection 통합
+- [x] Multi-scale adapter 구현
+- [ ] PyTorch DDP 최적화 설정 (TODO)
+- [ ] 차별화된 학습률 적용 (TODO)
+- [ ] 메모리 오버헤드 최적화 (TODO)
 
 ---
 
@@ -526,7 +540,7 @@ MASC-M Skip Connection Types
    └─────────────┘      │(Concat→1024)│
                         └─────────────┘
 
-3. 'attention' Type (FSCIL-ASAF) ⭐ 권장
+3. 'attention' Type (FSCIL-ASAF) ⭐ 현재 구현
    ┌─────────────┐      ┌─────────────┐
    │Skip_Feat1   │──┐   │Attention    │
    ├─────────────┤  │   │Weights      │
@@ -537,4 +551,6 @@ MASC-M Skip Connection Types
                                ▼
                         Weighted Fusion:
                         Σ(wi × Skip_Feati)
+                        
+   Note: 'add'와 'concat' 방식은 제거됨
 ``` 

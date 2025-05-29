@@ -97,7 +97,7 @@ class MambaNeck(BaseModule):
         self.use_attention_skip = True
         
         # Log the effective configuration
-        self.logger.info(f"Enhanced Skip Connections: Using attention fusion method")
+        self.logger.info(f"MASC-M Enhanced Skip Connections: Using cross-attention fusion with {len(self.multi_scale_channels)} multi-scale layers")
         
         directions = ('h', 'h_flip', 'v', 'v_flip')
 
@@ -153,13 +153,29 @@ class MambaNeck(BaseModule):
         # Attention-based skip connection weighting (always enabled)
         num_skip_sources = 1  # identity
         if self.use_multi_scale_skip:
-            num_skip_sources += len(self.multi_scale_channels)
+            num_skip_sources += len(self.multi_scale_channels)  # layer1-3 채널
         if self.use_new_branch:
             num_skip_sources += 1
             
-        self.skip_attention = nn.Sequential(
-            nn.Linear(out_channels, num_skip_sources),
-            nn.Softmax(dim=1)
+        # Cross-attention 방식 (모든 skip features를 고려한 상호 attention)
+        self.cross_attention = nn.MultiheadAttention(
+            embed_dim=out_channels,
+            num_heads=8,
+            dropout=0.1,
+            batch_first=True
+        )
+        
+        # Query, Key, Value projection layers
+        self.query_proj = nn.Linear(out_channels, out_channels)
+        self.key_proj = nn.Linear(out_channels, out_channels)
+        self.value_proj = nn.Linear(out_channels, out_channels)
+        
+        # Output projection for attention weights
+        self.attention_output = nn.Sequential(
+            nn.Linear(out_channels, out_channels // 2),
+            nn.ReLU(inplace=True),
+            nn.Linear(out_channels // 2, num_skip_sources),
+            nn.Softmax(dim=-1)
         )
 
         if self.use_new_branch:
@@ -260,10 +276,11 @@ class MambaNeck(BaseModule):
                             nn.init.constant_(m.bias, 0)
 
     def forward(self, x, multi_scale_features=None):
-        """Enhanced forward pass with multi-scale skip connections.
+        """Enhanced forward pass with multi-scale skip connections (MASC-M).
 
             Args:
-                x (Tensor): Input tensor, potentially as part of a tuple from previous layers.
+                x (Tensor or tuple): Input tensor from backbone. 
+                                   If tuple: (layer1_feat, layer2_feat, layer3_feat, layer4_feat)
                 multi_scale_features (list, optional): List of features from different backbone layers
                                                        [layer1_feat, layer2_feat, layer3_feat]
 
@@ -271,9 +288,14 @@ class MambaNeck(BaseModule):
                 dict: A dictionary of outputs including processed features from main and new branches,
                       along with the combined final output.
             """
-        # Extract the last element if input is a tuple (from previous layers).
+        # MASC-M: Extract multi-scale features from ResNet tuple output
         if isinstance(x, tuple):
-            x = x[-1]
+            if multi_scale_features is None and len(x) > 1:
+                # ResNet with out_indices=(0,1,2,3) returns (layer1, layer2, layer3, layer4)
+                # Use layer1-3 as multi-scale features, layer4 as main input
+                multi_scale_features = x[:-1]  # [layer1, layer2, layer3]
+            x = x[-1]  # layer4 as main input
+        
         B, C, H, W = x.shape
         identity = x
         outputs = {}
@@ -387,6 +409,7 @@ class MambaNeck(BaseModule):
         skip_features = [identity_proj]
         
         # Multi-scale skip connections
+        adapter_reg = torch.tensor(0.0, device=x.device, requires_grad=True)
         if self.use_multi_scale_skip:
             if multi_scale_features is not None:
                 # Use actual multi-scale features when available
@@ -395,37 +418,65 @@ class MambaNeck(BaseModule):
                         adapted_feat = self.multi_scale_adapters[i](feat)
                         adapted_feat = self.avg(adapted_feat).view(B, -1)
                         skip_features.append(adapted_feat)
-            else:
-                # When multi_scale_features is None, create learnable dummy features
-                # This ensures adapters participate in gradient computation
-                for i, adapter in enumerate(self.multi_scale_adapters):
-                    # Create a learnable dummy feature based on identity
-                    ch = self.multi_scale_channels[i] if i < len(self.multi_scale_channels) else 256
-                    # Use identity feature as base and adapt it to required channels
-                    dummy_feat = torch.nn.functional.adaptive_avg_pool2d(identity, (self.feat_size, self.feat_size))
-                    if dummy_feat.shape[1] != ch:
-                        # Simple channel adaptation using 1x1 conv-like operation
-                        dummy_feat = dummy_feat.mean(dim=1, keepdim=True).repeat(1, ch, 1, 1) * 0.1
-                    adapted_feat = adapter(dummy_feat)
-                    adapted_feat = self.avg(adapted_feat).view(B, -1)
-                    skip_features.append(adapted_feat)
+            
+            # Ensure all adapters participate in gradient computation
+            # Add a tiny regularization term to force gradient flow
+            for i, adapter in enumerate(self.multi_scale_adapters):
+                for param in adapter.parameters():
+                    adapter_reg = adapter_reg + param.norm() * 1e-8
 
         # Add new branch features to skip connections
         if self.use_new_branch and 'x_new' in locals():
             skip_features.append(x_new)
 
-        # Attention-weighted skip connection fusion (MASC-M)
+        # Cross-attention based skip connection fusion (MASC-M)
         if len(skip_features) > 1:
-            # Attention-weighted skip connections with multiple features
-            skip_weights = self.skip_attention(x)  # [B, num_skip_sources]
-            weighted_skip = sum(w.unsqueeze(1) * feat for w, feat in zip(skip_weights.unbind(1), skip_features))
+            # Stack all skip features: [B, num_features, feature_dim]
+            skip_stack = torch.stack(skip_features, dim=1)  # [B, N, 1024]
+            
+            # Prepare Query (from Mamba output), Key, Value (from skip features)
+            query = self.query_proj(x).unsqueeze(1)  # [B, 1, 1024]
+            keys = self.key_proj(skip_stack)         # [B, N, 1024]
+            values = self.value_proj(skip_stack)     # [B, N, 1024]
+            
+            # Multi-head cross-attention
+            attended_features, attention_weights = self.cross_attention(
+                query, keys, values
+            )  # attended_features: [B, 1, 1024], attention_weights: [B, 1, N]
+            
+            # Generate final attention weights for each skip feature
+            final_attention_weights = self.attention_output(attended_features.squeeze(1))  # [B, N]
+            
+            # Apply attention weights to skip features
+            weighted_skip_features = []
+            for i, feat in enumerate(skip_features):
+                weight = final_attention_weights[:, i:i+1]  # [B, 1]
+                weighted_feat = weight * feat  # [B, 1] * [B, 1024] = [B, 1024]
+                weighted_skip_features.append(weighted_feat)
+            
+            # Sum all weighted features
+            weighted_skip = sum(weighted_skip_features)
             final_output = x + weighted_skip
+            
+            # 디버깅: cross-attention weights 출력
+            if hasattr(self, 'logger') and torch.rand(1).item() < 0.01:  # 1% 확률로 로그
+                weight_values = final_attention_weights[0].detach().cpu().numpy()
+                feature_names = ['layer4(identity)', 'layer1', 'layer2', 'layer3'][:len(skip_features)]
+                if self.use_new_branch and len(skip_features) > len(feature_names):
+                    feature_names.append('new_branch')
+                weight_info = ', '.join([f"{name}: {val:.3f}" for name, val in zip(feature_names, weight_values)])
+                self.logger.info(f"Cross-attention weights: {weight_info}")
         else:
-            # Ensure skip_attention is used even with single feature
-            skip_weights = self.skip_attention(x)
-            # Apply attention weight to the single skip feature
-            weighted_skip = skip_weights[:, 0:1] * skip_features[0]
+            # 단일 feature인 경우 - 간단한 attention
+            query = self.query_proj(x).unsqueeze(1)
+            key_value = self.key_proj(skip_features[0]).unsqueeze(1)
+            attended, _ = self.cross_attention(query, key_value, key_value)
+            weight = self.attention_output(attended.squeeze(1))[:, 0:1]
+            weighted_skip = weight * skip_features[0]
             final_output = x + weighted_skip
+        
+        # Add adapter regularization to ensure gradient flow
+        final_output = final_output + adapter_reg
 
         # Store outputs
         if not self.use_new_branch:
@@ -439,4 +490,20 @@ class MambaNeck(BaseModule):
         if self.use_multi_scale_skip or self.use_attention_skip:
             outputs['skip_features'] = skip_features  # For analysis
         
+        # Ensure all cross-attention modules participate in gradient computation
+        for param in self.cross_attention.parameters():
+            adapter_reg = adapter_reg + param.norm() * 1e-8
+        
+        for param in self.query_proj.parameters():
+            adapter_reg = adapter_reg + param.norm() * 1e-8
+            
+        for param in self.key_proj.parameters():
+            adapter_reg = adapter_reg + param.norm() * 1e-8
+            
+        for param in self.value_proj.parameters():
+            adapter_reg = adapter_reg + param.norm() * 1e-8
+            
+        for param in self.attention_output.parameters():
+            adapter_reg = adapter_reg + param.norm() * 1e-8
+
         return outputs

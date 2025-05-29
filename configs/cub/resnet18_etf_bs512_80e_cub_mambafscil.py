@@ -12,19 +12,20 @@ model = dict(backbone=dict(_delete_=True,
                            type='ResNet',
                            depth=18,
                            frozen_stages=1,
+                           out_indices=(0, 1, 2, 3),  # Layer1-4 모든 출력
                            init_cfg=dict(type='Pretrained',
                                          checkpoint='torchvision://resnet18'),
                            norm_cfg=dict(type='SyncBN', requires_grad=True)),
              neck=dict(type='MambaNeck',
                        version='ss2d',
-                       in_channels=512,
+                       in_channels=512,  # Layer4 채널
                        out_channels=1024,
                        feat_size=7,
                        num_layers=2,
                        use_residual_proj=True,
-                       # Enhanced skip connection settings
+                       # Enhanced skip connection settings (MASC-M)
                        use_multi_scale_skip=True,
-                       multi_scale_channels=[64, 128, 256]),  # ResNet18 layer channels
+                       multi_scale_channels=[64, 128, 256]),  # Layer1-3 채널
              head=dict(type='ETFHead',
                        in_channels=1024,
                        num_classes=200,

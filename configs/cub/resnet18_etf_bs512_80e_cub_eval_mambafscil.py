@@ -33,8 +33,8 @@ model = dict(backbone=dict(_delete_=True,
                        loss_weight_sep_new=0.001,
                        param_avg_dim='0-1-3',
                        # Enhanced skip connection settings (MASC-M)
-                       use_multi_scale_skip=True,
-                       multi_scale_channels=[64, 128, 256]),  # Layer1-3 채널
+                       use_multi_scale_skip=False,
+                       multi_scale_channels=[64, 128, 256]),  # Layer1-4 모든 채널
              head=dict(type='ETFHead',
                        in_channels=1024,
                        num_classes=200,

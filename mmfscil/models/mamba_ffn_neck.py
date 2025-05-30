@@ -2,6 +2,7 @@ from collections import OrderedDict
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from einops import rearrange
 from mmcv.cnn import build_norm_layer
 from mmcv.runner import BaseModule
@@ -13,6 +14,103 @@ from mmcls.utils import get_root_logger
 
 from .mamba_ssm.modules.mamba_simple import Mamba
 from .ss2d import SS2D
+
+
+class MultiScaleSSMAdapter(BaseModule):
+    """SS2D-based Multi-Scale Feature Adapter.
+    
+    This adapter processes multi-scale features from different backbone layers
+    using SS2D blocks for enhanced feature representation.
+    
+    Args:
+        in_channels (int): Number of input channels from backbone layer.
+        out_channels (int): Number of output channels (typically 1024).
+        feat_size (int): Spatial size after adaptive pooling.
+        d_state (int): Dimension of the hidden state in SS2D.
+        dt_rank (int): Dimension rank in SS2D.
+        ssm_expand_ratio (float): Expansion ratio for SS2D block.
+    """
+    
+    def __init__(self,
+                 in_channels,
+                 out_channels=1024,
+                 feat_size=7,
+                 d_state=256,
+                 dt_rank=256,
+                 ssm_expand_ratio=1.0):
+        super(MultiScaleSSMAdapter, self).__init__(init_cfg=None)
+        
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.feat_size = feat_size
+        
+        # 1. Spatial size unification
+        self.spatial_adapter = nn.AdaptiveAvgPool2d((feat_size, feat_size))
+        
+        # 2. Pre-projection to target channels
+        self.pre_proj = nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False)
+        self.pre_norm = nn.BatchNorm2d(out_channels)
+        self.pre_act = nn.ReLU(inplace=True)
+        
+        # 3. SS2D block for sequence modeling
+        directions = ('h', 'h_flip', 'v', 'v_flip')
+        self.ss2d_block = SS2D(
+            out_channels,
+            ssm_ratio=ssm_expand_ratio,
+            d_state=d_state,
+            dt_rank=dt_rank,
+            directions=directions,
+            use_out_proj=False,
+            use_out_norm=True
+        )
+        
+        # 4. Positional embeddings for SS2D
+        self.pos_embed = nn.Parameter(
+            torch.zeros(1, feat_size * feat_size, out_channels)
+        )
+        trunc_normal_(self.pos_embed, std=.02)
+        
+        # 5. Final pooling
+        self.final_pool = nn.AdaptiveAvgPool2d((1, 1))
+        
+    def forward(self, x):
+        """Forward pass of Multi-Scale SSM Adapter.
+        
+        Args:
+            x (Tensor): Input feature tensor (B, in_channels, H, W)
+            
+        Returns:
+            Tensor: Output feature vector (B, out_channels)
+        """
+        B, C, H, W = x.shape
+        
+        # Step 1: Spatial size unification
+        x = self.spatial_adapter(x)  # (B, C, feat_size, feat_size)
+        
+        # Step 2: Channel projection to target dimensions
+        x = self.pre_proj(x)         # (B, out_channels, feat_size, feat_size)
+        x = self.pre_norm(x)
+        x = self.pre_act(x)
+        
+        # Step 3: Prepare for SS2D processing
+        x = x.permute(0, 2, 3, 1)    # (B, feat_size, feat_size, out_channels)
+        x = x.view(B, self.feat_size * self.feat_size, -1)  # (B, feat_size^2, out_channels)
+        
+        # Add positional embeddings
+        x = x + self.pos_embed       # (B, feat_size^2, out_channels)
+        
+        # Reshape back for SS2D
+        x = x.view(B, self.feat_size, self.feat_size, -1)  # (B, feat_size, feat_size, out_channels)
+        
+        # Step 4: SS2D processing for sequence modeling
+        x, _ = self.ss2d_block(x)    # (B, feat_size, feat_size, out_channels)
+        
+        # Step 5: Convert back to spatial format and pool
+        x = x.permute(0, 3, 1, 2)    # (B, out_channels, feat_size, feat_size)
+        x = self.final_pool(x)       # (B, out_channels, 1, 1)
+        x = x.view(B, -1)            # (B, out_channels)
+        
+        return x
 
 
 @NECKS.register_module()
@@ -98,6 +196,7 @@ class MambaNeck(BaseModule):
         
         # Log the effective configuration
         self.logger.info(f"MASC-M Enhanced Skip Connections: Using cross-attention fusion with {len(self.multi_scale_channels)} multi-scale layers")
+        self.logger.info(f"Multi-Scale SS2D Adapters: {self.multi_scale_channels} → {out_channels} channels with SS2D processing")
         
         directions = ('h', 'h_flip', 'v', 'v_flip')
 
@@ -142,11 +241,14 @@ class MambaNeck(BaseModule):
         if self.use_multi_scale_skip:
             self.multi_scale_adapters = nn.ModuleList()
             for ch in self.multi_scale_channels:
-                adapter = nn.Sequential(
-                    nn.AdaptiveAvgPool2d((self.feat_size, self.feat_size)),
-                    nn.Conv2d(ch, out_channels, kernel_size=1, bias=False),
-                    nn.BatchNorm2d(out_channels),
-                    nn.ReLU(inplace=True)
+                # SS2D 기반 Multi-Scale Adapter
+                adapter = MultiScaleSSMAdapter(
+                    in_channels=ch,
+                    out_channels=out_channels,
+                    feat_size=self.feat_size,
+                    d_state=d_state,
+                    dt_rank=self.d_rank,
+                    ssm_expand_ratio=ssm_expand_ratio
                 )
                 self.multi_scale_adapters.append(adapter)
         
@@ -252,8 +354,6 @@ class MambaNeck(BaseModule):
             nn.Conv2d(mid_channels, out_channels, kernel_size=1, bias=False))
         return nn.Sequential(*layers)
 
-
-
     def init_weights(self):
         """Enhanced initialization for skip connections."""
         if self.use_new_branch:
@@ -266,14 +366,21 @@ class MambaNeck(BaseModule):
                 f'{torch.norm(self.block_new.in_proj.weight.data[-dim_proj:, :])}'
             )
         
-        # Initialize multi-scale adapters with small weights
+        # Initialize multi-scale SS2D adapters
         if self.use_multi_scale_skip:
-            for adapter in self.multi_scale_adapters:
-                for m in adapter.modules():
-                    if isinstance(m, nn.Conv2d):
-                        nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                        if m.bias is not None:
-                            nn.init.constant_(m.bias, 0)
+            for i, adapter in enumerate(self.multi_scale_adapters):
+                # Initialize pre-projection layers
+                if hasattr(adapter, 'pre_proj'):
+                    nn.init.kaiming_normal_(adapter.pre_proj.weight, mode='fan_out', nonlinearity='relu')
+                
+                # Initialize SS2D blocks with small weights for stability
+                if hasattr(adapter, 'ss2d_block'):
+                    # Initialize input projection with smaller weights
+                    with torch.no_grad():
+                        if hasattr(adapter.ss2d_block, 'in_proj'):
+                            adapter.ss2d_block.in_proj.weight.data *= 0.1
+                
+                self.logger.info(f'Initialized MultiScaleSSMAdapter {i} for channel {self.multi_scale_channels[i]}')
 
     def forward(self, x, multi_scale_features=None):
         """Enhanced forward pass with multi-scale skip connections (MASC-M).
@@ -415,11 +522,15 @@ class MambaNeck(BaseModule):
                 # Use actual multi-scale features when available
                 for i, feat in enumerate(multi_scale_features):
                     if i < len(self.multi_scale_adapters):
-                        adapted_feat = self.multi_scale_adapters[i](feat)
-                        adapted_feat = self.avg(adapted_feat).view(B, -1)
+                        # SS2D-based adapter processing
+                        adapted_feat = self.multi_scale_adapters[i](feat)  # (B, 1024)
                         skip_features.append(adapted_feat)
+                        
+                        # Log adapter usage for debugging
+                        if hasattr(self, 'logger') and torch.rand(1).item() < 0.01:  # 1% 확률로 로그
+                            self.logger.info(f"SS2D Adapter {i}: {feat.shape} → {adapted_feat.shape}")
             
-            # Ensure all adapters participate in gradient computation
+            # Ensure all SS2D adapters participate in gradient computation
             # Add a tiny regularization term to force gradient flow
             for i, adapter in enumerate(self.multi_scale_adapters):
                 for param in adapter.parameters():

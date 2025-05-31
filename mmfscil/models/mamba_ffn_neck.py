@@ -516,7 +516,6 @@ class MambaNeck(BaseModule):
         skip_features = [identity_proj]
         
         # Multi-scale skip connections
-        adapter_reg = torch.tensor(0.0, device=x.device, requires_grad=True)
         if self.use_multi_scale_skip:
             if multi_scale_features is not None:
                 # Use actual multi-scale features when available
@@ -529,12 +528,6 @@ class MambaNeck(BaseModule):
                         # Log adapter usage for debugging
                         if hasattr(self, 'logger') and torch.rand(1).item() < 0.01:  # 1% 확률로 로그
                             self.logger.info(f"SS2D Adapter {i}: {feat.shape} → {adapted_feat.shape}")
-            
-            # Ensure all SS2D adapters participate in gradient computation
-            # Add a tiny regularization term to force gradient flow
-            for i, adapter in enumerate(self.multi_scale_adapters):
-                for param in adapter.parameters():
-                    adapter_reg = adapter_reg + param.norm() * 1e-8
 
         # Add new branch features to skip connections
         if self.use_new_branch and 'x_new' in locals():
@@ -585,9 +578,6 @@ class MambaNeck(BaseModule):
             weight = self.attention_output(attended.squeeze(1))[:, 0:1]
             weighted_skip = weight * skip_features[0]
             final_output = x + weighted_skip
-        
-        # Add adapter regularization to ensure gradient flow
-        final_output = final_output + adapter_reg
 
         # Store outputs
         if not self.use_new_branch:
@@ -600,21 +590,5 @@ class MambaNeck(BaseModule):
         outputs['out'] = final_output
         if self.use_multi_scale_skip or self.use_attention_skip:
             outputs['skip_features'] = skip_features  # For analysis
-        
-        # Ensure all cross-attention modules participate in gradient computation
-        for param in self.cross_attention.parameters():
-            adapter_reg = adapter_reg + param.norm() * 1e-8
-        
-        for param in self.query_proj.parameters():
-            adapter_reg = adapter_reg + param.norm() * 1e-8
-            
-        for param in self.key_proj.parameters():
-            adapter_reg = adapter_reg + param.norm() * 1e-8
-            
-        for param in self.value_proj.parameters():
-            adapter_reg = adapter_reg + param.norm() * 1e-8
-            
-        for param in self.attention_output.parameters():
-            adapter_reg = adapter_reg + param.norm() * 1e-8
 
         return outputs

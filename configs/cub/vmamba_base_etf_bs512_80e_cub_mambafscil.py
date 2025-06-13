@@ -10,8 +10,8 @@ inc_step = 10
 
 model = dict(backbone=dict(_delete_=True,
                            type='VMambaBackbone',
-                           model_name='vmamba_base_s2l15',  # Base model for best performance
-                           pretrained_path='./vssm1_base_0229s_ckpt_epoch_225.pth',
+                           model_name='vmamba_tiny_s1l8',  # VMamba Tiny model name for MambaNeck
+                           pretrained_path='./vssm1_tiny_0230s_ckpt_epoch_264.pth',  # VMamba Tiny pretrained weights
                            out_indices=(0, 1, 2, 3),  # Extract features from all 4 stages
                            frozen_stages=1,  # Freeze patch embedding and first stage
                            channel_first=True),

@@ -67,9 +67,21 @@ class CombinedLoss(nn.Module):
         self.dr_weight = dr_weight
         self.ce_weight = ce_weight
 
-    def forward(self, feat, target, **kwargs):
+    def forward(self, feat, target, labels=None, etf_vec=None, **kwargs):
         dr_loss = self.dr_loss(feat, target)
-        ce_loss = self.ce_loss(feat, target)
+        
+        # Cross Entropy Loss 계산
+        if etf_vec is not None:
+            # ETF 벡터를 사용하여 로짓 계산
+            logits = torch.matmul(feat, etf_vec)  # (batch_size, num_classes)
+            if labels is None:
+                # 레이블이 제공되지 않은 경우, target에서 가장 큰 값의 인덱스를 사용
+                labels = torch.argmax(target, dim=1)
+            ce_loss = self.ce_loss(logits, labels)
+        else:
+            # ETF 벡터가 없는 경우 CE Loss를 0으로 설정
+            ce_loss = torch.tensor(0.0, device=feat.device)
+        
         total_loss = self.dr_weight * dr_loss + self.ce_weight * ce_loss
         
         # Add individual losses to kwargs for logging
@@ -150,7 +162,12 @@ class ETFHead(ClsHead):
         else:
             target = self.etf_vec[:, gt_label].t()
 
-        losses = self.loss(x, target)
+        # CombinedLoss에 원본 레이블 전달
+        if isinstance(self.compute_loss, CombinedLoss):
+            losses = self.loss(x, target, labels=gt_label)
+        else:
+            losses = self.loss(x, target)
+
         if self.cal_acc:
             with torch.no_grad():
                 cls_score = x @ self.etf_vec
@@ -175,11 +192,15 @@ class ETFHead(ClsHead):
         losses = dict()
         # compute loss
         if self.with_len:
-            loss = self.compute_loss(feat,
-                                     target,
-                                     m_norm2=torch.norm(target, p=2, dim=1))
+            if isinstance(self.compute_loss, CombinedLoss):
+                loss = self.compute_loss(feat, target, etf_vec=self.etf_vec, m_norm2=torch.norm(target, p=2, dim=1), **kwargs)
+            else:
+                loss = self.compute_loss(feat, target, m_norm2=torch.norm(target, p=2, dim=1))
         else:
-            loss = self.compute_loss(feat, target)
+            if isinstance(self.compute_loss, CombinedLoss):
+                loss = self.compute_loss(feat, target, etf_vec=self.etf_vec, **kwargs)
+            else:
+                loss = self.compute_loss(feat, target)
         losses['loss'] = loss
         return losses
 

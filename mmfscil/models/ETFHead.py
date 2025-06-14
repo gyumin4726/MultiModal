@@ -52,6 +52,36 @@ class DRLoss(nn.Module):
         return loss * self.loss_weight
 
 
+@LOSSES.register_module()
+class CombinedLoss(nn.Module):
+    """Combined loss of DRLoss and CrossEntropyLoss.
+    
+    Args:
+        dr_weight (float): Weight for DRLoss. Default: 1.0
+        ce_weight (float): Weight for CrossEntropyLoss. Default: 1.0
+    """
+    def __init__(self, dr_weight=1.0, ce_weight=1.0):
+        super().__init__()
+        self.dr_loss = DRLoss()
+        self.ce_loss = nn.CrossEntropyLoss()
+        self.dr_weight = dr_weight
+        self.ce_weight = ce_weight
+
+    def forward(self, feat, target, **kwargs):
+        dr_loss = self.dr_loss(feat, target)
+        ce_loss = self.ce_loss(feat, target)
+        total_loss = self.dr_weight * dr_loss + self.ce_weight * ce_loss
+        
+        # Add individual losses to kwargs for logging
+        if 'log_vars' in kwargs:
+            kwargs['log_vars'].update({
+                'dr_loss': dr_loss.item(),
+                'ce_loss': ce_loss.item()
+            })
+        
+        return total_loss
+
+
 @HEADS.register_module()
 class ETFHead(ClsHead):
     """Classification head for Baseline.

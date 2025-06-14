@@ -17,22 +17,24 @@ model = dict(backbone=dict(_delete_=True,
                            channel_first=True),
              neck=dict(type='MambaNeck',
                        version='ss2d',
-                       in_channels=1024,  # VMamba base stage4 output channels
-                       out_channels=1024,
+                       in_channels=768,  # VMamba base stage4 output channels
+                       out_channels=768,
                        feat_size=7,  # 224 / (4*8) = 7 (patch_size=4, 4 downsample stages with 2x each)
                        num_layers=2,
                        use_residual_proj=True,
                        # Enhanced skip connection settings (MASC-M) for VMamba features
                        use_multi_scale_skip=True,
-                       multi_scale_channels=[128, 256, 512]),  # VMamba base stage1-3 channels
+                       multi_scale_channels=[96, 192, 384]),
              head=dict(type='ETFHead',
-                       in_channels=1024,
+                       in_channels=768,
                        num_classes=200,
                        eval_classes=100,
                        with_len=False,
-                       cal_acc=True),
+                       cal_acc=True,
+                       loss=dict(type='CombinedLoss', dr_weight=1.0, ce_weight=1.0)),
              mixup=0,
              mixup_prob=0)
+
 
 # dataset settings
 img_size = 224
@@ -58,6 +60,18 @@ original_pipeline = [
 augmented_pipeline = [
     dict(type='LoadAugmentedImage',
          aug_dir='data/CUB_200_2011/augmented_images'),
+    dict(type='Resize', size=(_img_resize_size, _img_resize_size)),
+    dict(type='CenterCrop', crop_size=img_size),
+    dict(type='Normalize', **img_norm_cfg),
+    dict(type='ImageToTensor', keys=['img']),
+    dict(type='ToTensor', keys=['gt_label']),
+    dict(type='Collect', keys=['img', 'gt_label'], meta_keys=meta_keys)
+]
+
+# 증강 이미지용 파이프라인
+augmented_pipeline4 = [
+    dict(type='LoadAugmentedImage',
+         aug_dir='data/CUB_200_2011/augmented_images_patch_4'),
     dict(type='Resize', size=(_img_resize_size, _img_resize_size)),
     dict(type='CenterCrop', crop_size=img_size),
     dict(type='Normalize', **img_norm_cfg),
@@ -101,21 +115,6 @@ data = dict(
                 pipeline=original_pipeline,
                 num_cls=100,
                 subset='train',
-            ),
-            dict(  # 기존 증강 이미지
-                type='CUBFSCILDataset',
-                data_prefix='./data/CUB_200_2011',
-                pipeline=augmented_pipeline,
-                num_cls=100,
-                subset='train',
-            ),
-            dict(  # 회전된 이미지 (모든 각도)
-                type='CUBFSCILDataset',
-                data_prefix='./data/CUB_200_2011',
-                ann_file='./data/CUB_200_2011/rotated_train.txt',
-                pipeline=rotated_pipeline,
-                num_cls=100,
-                subset='train',
             )
         ]
     ),
@@ -157,3 +156,5 @@ lr_config = dict(
     warmup_by_epoch=False)
 
 runner = dict(type='EpochBasedRunner', max_epochs=20) 
+
+find_unused_parameters=True

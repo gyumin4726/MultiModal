@@ -13,13 +13,13 @@ model = dict(backbone=dict(_delete_=True,
                            type='VMambaBackbone',
                            model_name='vmamba_tiny_s1l8',  # VMamba Tiny model name for MambaNeck
                            pretrained_path='./vssm1_tiny_0230s_ckpt_epoch_264.pth',  # VMamba Tiny pretrained weights
-                           out_indices=(0, 1, 2, 3),  # Extract features from all 4 stages
+                           out_indices=(0, 1, 2, 3),  # Multi-scale features from all stages
                            frozen_stages=1,  # Freeze patch embedding and first stage
                            channel_first=True),
              neck=dict(type='MambaNeck',
                        version='ss2d',
-                       in_channels=1024,  # VMamba base stage4 channels
-                       out_channels=1024,
+                       in_channels=768,  # VMamba base stage4 channels
+                       out_channels=768,
                        feat_size=7,
                        num_layers=2,
                        use_residual_proj=True,
@@ -33,11 +33,15 @@ model = dict(backbone=dict(_delete_=True,
                        param_avg_dim='0-1-3',
                        # Enhanced skip connection settings (MASC-M)
                        use_multi_scale_skip=True,
-                       multi_scale_channels=[128, 256, 512]),  # VMamba base channels
+                       multi_scale_channels=[96, 192, 384]), 
              head=dict(type='ETFHead',
-                       in_channels=1024,
+                       in_channels=768,
                        num_classes=200,
                        eval_classes=100,
+                       loss=[
+                           dict(type='DRLoss', loss_weight=1.0),
+                           dict(type='CrossEntropyLoss', loss_weight=1.0)
+                        ],
                        with_len=False),
              mixup=0.5,
              mixup_prob=0.5)
@@ -79,3 +83,5 @@ lr_config = dict(
     warmup_iters=100,
     warmup_ratio=0.1,
     warmup_by_epoch=False) 
+
+find_unused_parameters=True

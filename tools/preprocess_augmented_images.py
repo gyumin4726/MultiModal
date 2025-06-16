@@ -20,8 +20,10 @@ def preprocess_and_save_augmented_images(config_file, output_dir):
     # 전처리용 파이프라인 정의
     preprocess_pipeline = [
         dict(type='LoadImageFromFile'),
+        dict(type='Resize', size=(256, 256)),
+        dict(type='CenterCrop', crop_size=224),
         dict(type='DirectionalPatchAugment',
-             patch_size=7,
+             patch_size=4,
              strength=0.5,
              visualize=False)
     ]
@@ -69,5 +71,5 @@ def preprocess_and_save_augmented_images(config_file, output_dir):
 
 if __name__ == '__main__':
     config_file = 'configs/cub/resnet18_etf_bs512_80e_cub_mambafscil.py'
-    output_dir = 'data/CUB_200_2011/augmented_images'
+    output_dir = 'data/CUB_200_2011/augmented_images_1'
     preprocess_and_save_augmented_images(config_file, output_dir) 

@@ -31,7 +31,7 @@ model = dict(backbone=dict(_delete_=True,
                        eval_classes=100,
                        with_len=False,
                        cal_acc=True,
-                       loss=dict(type='CombinedLoss', dr_weight=1.0, ce_weight=1.0)),
+                       loss=dict(type='CombinedLoss', dr_weight=0.0, ce_weight=1.0)),
              mixup=0,
              mixup_prob=0)
 
@@ -60,8 +60,6 @@ original_pipeline = [
 augmented_pipeline = [
     dict(type='LoadAugmentedImage',
          aug_dir='data/CUB_200_2011/augmented_images'),
-    dict(type='Resize', size=(_img_resize_size, _img_resize_size)),
-    dict(type='CenterCrop', crop_size=img_size),
     dict(type='Normalize', **img_norm_cfg),
     dict(type='ImageToTensor', keys=['img']),
     dict(type='ToTensor', keys=['gt_label']),
@@ -72,8 +70,6 @@ augmented_pipeline = [
 augmented_pipeline4 = [
     dict(type='LoadAugmentedImage',
          aug_dir='data/CUB_200_2011/augmented_images_patch_4'),
-    dict(type='Resize', size=(_img_resize_size, _img_resize_size)),
-    dict(type='CenterCrop', crop_size=img_size),
     dict(type='Normalize', **img_norm_cfg),
     dict(type='ImageToTensor', keys=['img']),
     dict(type='ToTensor', keys=['gt_label']),

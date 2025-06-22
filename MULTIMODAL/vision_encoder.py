@@ -46,9 +46,13 @@ class VMambaBackbone(nn.Module):
         self.output_dim = output_dim
         
         # VMamba 모델 생성
+        print(f"🔧 Creating VMamba model: {model_name}")
         if model_name == 'vmamba_tiny_s1l8':
+            print(f"   Using vmamba_tiny_s1l8 with pretrained={pretrained}")
             self.backbone = vmamba_tiny_s1l8(pretrained=pretrained, channel_first=True)
+            print(f"   ✅ vmamba_tiny_s1l8 model created successfully")
         else:
+            print(f"   Using VSSM class with custom config")
             # 기본적으로 VSSM 클래스 사용
             self.backbone = VSSM(
                 depths=[2, 2, 8, 2], 
@@ -94,6 +98,31 @@ class VMambaBackbone(nn.Module):
             
         print(f"VMamba backbone initialized: {model_name}")
         print(f"Feature dimension: {self.feature_dim} -> {output_dim}")
+    
+    def load_pretrained_weights(self, pretrained_path):
+        """VMamba 전용 가중치 로딩"""
+        print(f"📥 Loading VMamba weights from: {pretrained_path}")
+        try:
+            checkpoint = torch.load(pretrained_path, map_location='cpu')
+            if 'model' in checkpoint:
+                state_dict = checkpoint['model']
+            else:
+                state_dict = checkpoint
+            
+            # 직접 backbone에 로딩 (접두사 없이)
+            missing_keys, unexpected_keys = self.backbone.load_state_dict(state_dict, strict=False)
+            
+            print(f"   ✅ Loaded VMamba weights")
+            print(f"   📊 Missing keys: {len(missing_keys)}")
+            print(f"   📊 Unexpected keys: {len(unexpected_keys)}")
+            
+            if len(missing_keys) > 0:
+                print(f"   ⚠️ Missing keys (first 5): {missing_keys[:5]}")
+            if len(unexpected_keys) > 0:
+                print(f"   ⚠️ Unexpected keys (first 5): {unexpected_keys[:5]}")
+                
+        except Exception as e:
+            print(f"   ❌ Failed to load VMamba weights: {e}")
     
     def _get_feature_dim(self):
         """백본의 피처 차원 확인"""
@@ -227,10 +256,14 @@ class VisionEncoder(nn.Module):
             print("🔥 Using VMamba backbone")
             self.backbone = VMambaBackbone(
                 model_name=model_name,
-                pretrained=(pretrained_path is None),
+                pretrained=False,  # 내부 다운로드 방지
                 output_dim=output_dim if not use_neck else 768
             )
             backbone_dim = 768
+            
+            # 사전 학습된 가중치 로딩 (VMambaBackbone에서 직접 처리)
+            if pretrained_path and os.path.exists(pretrained_path):
+                self.backbone.load_pretrained_weights(pretrained_path)
         else:
             print("⚠️ VMamba not available, using ResNet backbone")
             resnet_name = 'resnet50' if 'base' in model_name else 'resnet18'
@@ -251,9 +284,22 @@ class VisionEncoder(nn.Module):
         else:
             self.neck = None
         
-        # 사전 학습된 가중치 로딩
-        if pretrained_path and os.path.exists(pretrained_path):
-            self.load_pretrained_weights(pretrained_path)
+        # 사전 학습된 가중치 로딩 (VMamba는 이미 위에서 처리됨)
+        print(f"🔍 Checking pretrained weights...")
+        if pretrained_path:
+            print(f"   Pretrained path specified: {pretrained_path}")
+            if os.path.exists(pretrained_path):
+                if not (VMAMBA_AVAILABLE and model_name.startswith('vmamba')):
+                    # VMamba가 아닌 경우에만 일반적인 가중치 로딩 수행
+                    print(f"   ✅ Pretrained file found, loading...")
+                    self.load_pretrained_weights(pretrained_path)
+                else:
+                    print(f"   ✅ VMamba weights already loaded by backbone")
+            else:
+                print(f"   ❌ Pretrained file not found: {pretrained_path}")
+                print(f"   🔄 Using default initialization")
+        else:
+            print(f"   ℹ️ No pretrained path specified, using default weights")
         
         # 일부 레이어 고정
         if frozen_stages >= 0:
@@ -261,30 +307,83 @@ class VisionEncoder(nn.Module):
     
     def load_pretrained_weights(self, path):
         """사전 학습된 가중치 로딩"""
+        print(f"📥 Loading pretrained weights from: {path}")
         try:
+            print(f"   📂 Reading checkpoint file...")
             checkpoint = torch.load(path, map_location='cpu')
+            print(f"   ✅ Checkpoint loaded successfully")
+            
+            # 체크포인트 구조 확인
+            print(f"   🔍 Analyzing checkpoint structure...")
             if 'model' in checkpoint:
                 state_dict = checkpoint['model']
+                print(f"   📦 Using 'model' key from checkpoint")
             elif 'state_dict' in checkpoint:
                 state_dict = checkpoint['state_dict']
+                print(f"   📦 Using 'state_dict' key from checkpoint")
             else:
                 state_dict = checkpoint
+                print(f"   📦 Using checkpoint directly as state_dict")
+            
+            print(f"   📊 Checkpoint contains {len(state_dict)} parameters")
             
             # 호환되는 키만 로딩
+            print(f"   🔄 Filtering compatible parameters...")
             model_dict = self.state_dict()
             filtered_dict = {}
             
-            for k, v in state_dict.items():
-                if k in model_dict and model_dict[k].shape == v.shape:
-                    filtered_dict[k] = v
+            compatible_count = 0
+            incompatible_count = 0
             
-            model_dict.update(filtered_dict)
-            self.load_state_dict(model_dict, strict=False)
-            print(f"✅ Loaded pretrained weights from {path}")
-            print(f"   Loaded {len(filtered_dict)}/{len(state_dict)} parameters")
+            for k, v in state_dict.items():
+                # VMamba 체크포인트는 backbone. 접두사가 없으므로 추가
+                target_key = f"backbone.{k}"
+                found = False
+                
+                if target_key in model_dict:
+                    if model_dict[target_key].shape == v.shape:
+                        filtered_dict[target_key] = v
+                        compatible_count += 1
+                        found = True
+                    else:
+                        print(f"   ⚠️ Shape mismatch for {target_key}: model={model_dict[target_key].shape} vs checkpoint={v.shape}")
+                        incompatible_count += 1
+                        found = True
+                
+                # 원본 키도 시도 (혹시 모를 경우)
+                if not found:
+                    if k in model_dict:
+                        if model_dict[k].shape == v.shape:
+                            filtered_dict[k] = v
+                            compatible_count += 1
+                            found = True
+                        else:
+                            print(f"   ⚠️ Shape mismatch for {k}: model={model_dict[k].shape} vs checkpoint={v.shape}")
+                            incompatible_count += 1
+                            found = True
+                
+                if not found:
+                    print(f"   ⚠️ Key not found in model: {k} (tried: backbone.{k}, {k})")
+                    incompatible_count += 1
+            
+            print(f"   📈 Parameter matching results:")
+            print(f"      Compatible: {compatible_count}")
+            print(f"      Incompatible: {incompatible_count}")
+            print(f"      Total in checkpoint: {len(state_dict)}")
+            print(f"      Match rate: {compatible_count/len(state_dict)*100:.1f}%")
+            
+            # 실제 로딩
+            if compatible_count > 0:
+                model_dict.update(filtered_dict)
+                self.load_state_dict(model_dict, strict=False)
+                print(f"   ✅ Successfully loaded {compatible_count} parameters")
+            else:
+                print(f"   ❌ No compatible parameters found, using random initialization")
             
         except Exception as e:
-            print(f"⚠️ Failed to load pretrained weights: {e}")
+            print(f"   ❌ Failed to load pretrained weights: {e}")
+            import traceback
+            traceback.print_exc()
     
     def freeze_stages(self, frozen_stages):
         """지정된 스테이지까지 가중치 고정"""
@@ -295,6 +394,10 @@ class VisionEncoder(nn.Module):
             print(f"🧊 Frozen backbone parameters")
     
     def forward(self, x):
+        # 입력이 이미지 경로인 경우 처리
+        if isinstance(x, str):
+            x = self.preprocess_image(x)
+        
         # 백본을 통한 피처 추출
         features = self.backbone(x)
         
@@ -303,6 +406,36 @@ class VisionEncoder(nn.Module):
             features = self.neck(features)
         
         return features
+    
+    def preprocess_image(self, image_path):
+        """이미지 경로를 텐서로 변환"""
+        try:
+            # 이미지 로딩 및 전처리
+            image = Image.open(image_path).convert("RGB")
+            
+            # 전처리 transform
+            transform = transforms.Compose([
+                transforms.Resize((224, 224)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                   std=[0.229, 0.224, 0.225])
+            ])
+            
+            image_tensor = transform(image).unsqueeze(0)  # (1, 3, 224, 224)
+            
+            # GPU로 이동 (가능한 경우)
+            if torch.cuda.is_available():
+                image_tensor = image_tensor.cuda()
+                
+            return image_tensor
+            
+        except Exception as e:
+            print(f"Error preprocessing image {image_path}: {e}")
+            # 더미 텐서 반환
+            dummy = torch.randn(1, 3, 224, 224)
+            if torch.cuda.is_available():
+                dummy = dummy.cuda()
+            return dummy
 
 
 def load_vision_encoder(model_name='vmamba_tiny_s1l8', **kwargs):

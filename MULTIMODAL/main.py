@@ -158,40 +158,28 @@ def load_models():
 def process_vqa_sample(models, image_path, question, choices):
     """단일 VQA 샘플 처리 (안전한 방식)"""
     try:
-        # 이미지 로딩
+        # 이미지 경로 확인
         if not os.path.exists(image_path):
             print(f"Warning: Image not found: {image_path}")
             return 'A'
-            
-        image = Image.open(image_path).convert("RGB")
-        image_tensor = models['transform'](image).unsqueeze(0).to(models['device'])
         
         # Vision Features 추출 (선택적)
         vision_features = None
         if models['vision_encoder'] is not None:
             with torch.no_grad():
                 try:
-                    vision_features = models['vision_encoder'](image_tensor)
+                    vision_features = models['vision_encoder'](image_path)
                 except Exception as e:
                     print(f"Warning: Vision encoding failed - {e}")
         
-        # 프롬프트 구성
-        choices_text = "\n".join([f"{chr(65+i)}. {choice}" for i, choice in enumerate(choices)])
-        
-        prompt = (
-            "You are a helpful AI that answers multiple-choice questions.\n"
-            "Select the best answer from A, B, C, or D.\n\n"
-            f"Question: {question}\n"
-            f"{choices_text}\n\n"
-            "Answer:"
-        )
+        # 프롬프트는 이제 LLM 내부에서 피처와 함께 구성됨
         
         # Text Features 추출 (선택적)
         text_features = None
         if models['text_encoder'] is not None:
             with torch.no_grad():
                 try:
-                    text_features = models['text_encoder']([question])
+                    text_features = models['text_encoder'](question)
                 except Exception as e:
                     print(f"Warning: Text encoding failed - {e}")
         
@@ -206,15 +194,34 @@ def process_vqa_sample(models, image_path, question, choices):
                 except Exception as e:
                     print(f"Warning: Multimodal fusion failed - {e}")
         
-        # LLM 추론
+        # 피처 추출 상태 확인 (디버깅용)
+        features_available = []
+        if vision_features is not None:
+            features_available.append(f"Vision({vision_features.shape})")
+        if text_features is not None:
+            features_available.append(f"Text({text_features.shape})")
+        if fused_features is not None:
+            features_available.append(f"Fused({fused_features.shape})")
+        
+        # LLM 추론 (피처 활용)
         if models['language_model'] is not None:
             try:
-                response = models['language_model'].generate_text(
-                    prompt,
-                    max_new_tokens=10,
-                    temperature=0.0
-                )
-                answer = extract_answer_letter(response)
+                # 피처 기반 추론 시도
+                if vision_features is not None or text_features is not None or fused_features is not None:
+                    print(f"🚀 Using features: {', '.join(features_available)}")
+                    response = models['language_model'].answer_question_with_features(
+                        question=question,
+                        choices=choices,
+                        vision_features=vision_features,
+                        text_features=text_features,
+                        fused_features=fused_features
+                    )
+                    answer = extract_answer_letter(response)
+                else:
+                    print("⚠️ No features available, using text-only mode")
+                    # 피처가 없으면 기본 방식
+                    response = models['language_model'].answer_question_simple(question, choices)
+                    answer = extract_answer_letter(response)
             except Exception as e:
                 print(f"Warning: LLM generation failed - {e}")
                 answer = 'A'

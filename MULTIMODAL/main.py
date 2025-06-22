@@ -1,161 +1,218 @@
 import torch
+import pandas as pd
 from PIL import Image
 import torchvision.transforms as transforms
+from tqdm import tqdm
+import re
 from config import seed_everything
 from vision_encoder import load_vision_encoder
-from text_encoder import load_text_encoder, list_available_models
+from text_encoder import load_text_encoder
 from language_model import load_language_model
+from multimodal_fusion import MultiModalFusion
+import os
 
-def test_vision_encoder():
-    """비전 인코더 테스트"""
-    print("🔍 Loading vision encoder...")
+def extract_answer_letter(text):
+    """응답에서 A, B, C, D 추출"""
+    text = text.strip().upper()
+    
+    # 패턴 매칭으로 답변 추출
+    patterns = [
+        r'\b([ABCD])\b',  # 단독 문자
+        r'답:\s*([ABCD])',  # 답: A 형태
+        r'정답:\s*([ABCD])',  # 정답: A 형태
+        r'Answer:\s*([ABCD])',  # Answer: A 형태
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return match.group(1)
+    
+    # 첫 번째로 나타나는 A, B, C, D 반환
+    for char in text:
+        if char in 'ABCD':
+            return char
+            
+    return 'A'  # 기본값
+
+def load_models():
+    """모든 모델 로딩"""
+    print("🚀 Loading MultiModal VQA System...")
+    
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"🔧 Using device: {device}")
+    
+    # Vision Encoder
+    print("🖼️ Loading Vision Encoder...")
     try:
         vision_encoder = load_vision_encoder(
             model_name='vmamba_tiny_s1l8',
             pretrained_path='./vssm1_tiny_0230s_ckpt_epoch_264.pth',
             output_dim=768,
             frozen_stages=1
-        )
-        print("✅ Vision encoder loaded successfully!")
-        
-        # GPU 로딩
-        if torch.cuda.is_available():
-            vision_encoder = vision_encoder.cuda()
-        
-        # 이미지 전처리 파이프라인
-        transform = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[123.675/255, 116.28/255, 103.53/255],
-                               std=[58.395/255, 57.12/255, 57.375/255])
-        ])
-        
-        # 테스트 이미지 로딩
-        test_image_path = "input_images/TEST_000.jpg"
-        try:
-            image = Image.open(test_image_path).convert("RGB")
-            image_tensor = transform(image).unsqueeze(0)  # (1, 3, 224, 224)
-            
-            if torch.cuda.is_available():
-                image_tensor = image_tensor.cuda()
-            
-            # 비전 인코더 추론
-            with torch.no_grad():
-                vision_features = vision_encoder(image_tensor)
-                print(f"✅ Vision features shape: {vision_features.shape}")
-                print(f"✅ Vision features norm: {vision_features.norm().item():.4f}")
-                
-        except FileNotFoundError:
-            print("⚠️ Test image not found, creating dummy tensor for testing...")
-            dummy_image = torch.randn(1, 3, 224, 224)
-            if torch.cuda.is_available():
-                dummy_image = dummy_image.cuda()
-            
-            with torch.no_grad():
-                vision_features = vision_encoder(dummy_image)
-                print(f"✅ Vision features shape: {vision_features.shape}")
-                print(f"✅ Vision features norm: {vision_features.norm().item():.4f}")
-        
-        return vision_encoder
-        
+        ).to(device)
+        print("✅ Vision Encoder loaded!")
     except Exception as e:
-        print(f"❌ Error loading vision encoder: {e}")
-        return None
-
-def test_text_encoder():
-    """텍스트 인코더 테스트"""
-    print("📝 Loading text encoder...")
+        print(f"❌ Vision Encoder failed: {e}")
+        vision_encoder = None
+    
+    # Text Encoder
+    print("📝 Loading Text Encoder...")
     try:
-        # 사용 가능한 모델 목록 출력
-        print("\n📋 Available text encoder models:")
-        list_available_models()
-        
-        # 기본 텍스트 인코더 로딩 (all-MiniLM-L6-v2)
         text_encoder = load_text_encoder(
             model_type='default',
-            output_dim=768  # VMamba와 맞춤
+            output_dim=768
         )
-        print("✅ Text encoder loaded successfully!")
-        
-        # 테스트 텍스트들
-        test_texts = [
-            "What is shown in this image?",
-            "Describe the main objects in the picture.",
-            "Can you identify the key features in this photo?",
-            "What are the colors and shapes visible?"
-        ]
-        
-        # 텍스트 인코딩 테스트
-        print(f"🔤 Encoding {len(test_texts)} test sentences...")
-        with torch.no_grad():
-            text_features = text_encoder(test_texts)
-            print(f"✅ Text features shape: {text_features.shape}")
-            print(f"✅ Text features norm: {text_features.norm(dim=1).mean().item():.4f}")
-            
-            # 개별 문장별 결과
-            for i, text in enumerate(test_texts):
-                norm = text_features[i].norm().item()
-                print(f"   📄 Sentence {i+1}: norm={norm:.4f}")
-        
-        return text_encoder
-        
+        print("✅ Text Encoder loaded!")
     except Exception as e:
-        print(f"❌ Error loading text encoder: {e}")
-        print("💡 Make sure sentence-transformers is installed: pip install sentence-transformers")
-        return None
-
-def test_language_model():
-    """언어 모델 테스트"""
-    print("🤖 Loading language model...")
+        print(f"❌ Text Encoder failed: {e}")
+        text_encoder = None
+    
+    # Language Model
+    print("🤖 Loading Language Model...")
     try:
         language_model = load_language_model(model_name="microsoft/phi-2")
-        print("✅ Language model loaded successfully!")
+        print("✅ Language Model loaded!")
+    except Exception as e:
+        print(f"❌ Language Model failed: {e}")
+        language_model = None
+    
+    # MultiModal Fusion
+    print("🔗 Loading MultiModal Fusion...")
+    try:
+        multimodal_fusion = MultiModalFusion(
+            vision_dim=768,
+            text_dim=768,
+            hidden_dim=512,
+            num_heads=8
+        ).to(device)
+        print("✅ MultiModal Fusion loaded!")
+    except Exception as e:
+        print(f"❌ MultiModal Fusion failed: {e}")
+        multimodal_fusion = None
+    
+    # Image Transform
+    transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                           std=[0.229, 0.224, 0.225])
+    ])
+    
+    return {
+        'vision_encoder': vision_encoder,
+        'text_encoder': text_encoder,
+        'language_model': language_model,
+        'multimodal_fusion': multimodal_fusion,
+        'transform': transform,
+        'device': device
+    }
+
+def process_vqa_sample(models, image_path, question, choices):
+    """단일 VQA 샘플 처리"""
+    try:
+        # 이미지 로딩
+        if not os.path.exists(image_path):
+            return 'A'
+            
+        image = Image.open(image_path).convert("RGB")
+        image_tensor = models['transform'](image).unsqueeze(0).to(models['device'])
         
-        # 텍스트 생성 테스트
-        prompt = "Explain what a black hole is in simple terms."
-        result = language_model.generate_text(prompt, max_new_tokens=100)
-        print(f"Generated text: {result}")
+        # Vision Features 추출
+        with torch.no_grad():
+            if models['vision_encoder'] is not None:
+                vision_features = models['vision_encoder'](image_tensor)
+            else:
+                vision_features = None
         
-        return language_model
+        # 프롬프트 구성
+        choices_text = "\n".join([f"{chr(65+i)}. {choice}" for i, choice in enumerate(choices)])
+        
+        prompt = (
+            "You are a helpful AI that answers multiple-choice questions based on the given image.\n"
+            "Select the best answer from A, B, C, or D.\n\n"
+            f"Question: {question}\n"
+            f"{choices_text}\n"
+            "Answer:"
+        )
+        
+        # Text Features 추출 (옵션)
+        if models['text_encoder'] is not None:
+            with torch.no_grad():
+                text_features = models['text_encoder']([question])
+        else:
+            text_features = None
+        
+        # MultiModal Fusion (옵션)
+        if (models['multimodal_fusion'] is not None and 
+            vision_features is not None and 
+            text_features is not None):
+            with torch.no_grad():
+                fused_features = models['multimodal_fusion'](vision_features, text_features)
+        
+        # LLM 추론
+        if models['language_model'] is not None:
+            response = models['language_model'].generate_text(
+                prompt,
+                max_new_tokens=5,
+                temperature=0.0
+            )
+            answer = extract_answer_letter(response)
+        else:
+            answer = 'A'  # 기본값
+            
+        return answer
         
     except Exception as e:
-        print(f"❌ Error loading language model: {e}")
-        return None
+        print(f"❌ Error processing sample: {e}")
+        return 'A'
 
-if __name__ == "__main__":
+def main():
+    """메인 추론 함수"""
     # 시드 고정
     seed_everything()
     
-    print("🚀 Starting complete MultiModal system test...")
+    print("🚀 Starting MultiModal VQA Inference...")
     print("="*60)
     
-    # 개별 모듈 테스트
-    print("\n1️⃣ Testing VMamba Vision Encoder")
-    print("-"*40)
-    vision_encoder = test_vision_encoder()
+    # 모델 로딩
+    models = load_models()
     
-    print("\n2️⃣ Testing sentence-transformers Text Encoder")
-    print("-"*40)
-    text_encoder = test_text_encoder()
+    # 데이터 로딩
+    print("\n📊 Loading test data...")
+    test = pd.read_csv('./dev_test.csv')
+    print(f"📋 Total samples: {len(test)}")
     
-    print("\n3️⃣ Testing microsoft/phi-2 Language Model")
-    print("-"*40)
-    language_model = test_language_model()
+    # 추론
+    print("\n🔍 Starting inference...")
+    results = []
     
-    # 최종 결과
-    print("\n" + "="*60)
-    print("📊 FINAL RESULTS:")
-    print(f"   Vision Encoder (VMamba): {'✅ OK' if vision_encoder else '❌ FAILED'}")
-    print(f"   Text Encoder (BERT): {'✅ OK' if text_encoder else '❌ FAILED'}")
-    print(f"   Language Model (phi-2): {'✅ OK' if language_model else '❌ FAILED'}")
+    for _, row in tqdm(test.iterrows(), total=len(test), desc="Processing"):
+        image_path = row['img_path']
+        question = row['Question']
+        choices = [row[c] for c in ['A', 'B', 'C', 'D']]
+        
+        # VQA 처리
+        answer = process_vqa_sample(models, image_path, question, choices)
+        results.append(answer)
     
-    if all([vision_encoder, text_encoder, language_model]):
-        print("\n🎉 All three modules are working perfectly!")
-        print("🔥 Ready to implement full multimodal integration!")
-        print("\n📋 Current architecture:")
-        print("   🖼️ Vision: VMamba (사전학습)")
-        print("   📝 Text: sentence-transformers (사전학습)")  
-        print("   🤖 LLM: microsoft/phi-2 (사전학습)")
-    else:
-        print("\n⚠️ Some modules need attention.")
-        print("🔧 Please check the error messages above.") 
+    print('✅ Inference completed!')
+    
+    # 결과 저장
+    print("\n📁 Saving results...")
+    submission = pd.read_csv('./sample_submission.csv')
+    submission['answer'] = results
+    submission.to_csv('./baseline_submit.csv', index=False)
+    
+    print("✅ Results saved to 'baseline_submit.csv'")
+    
+    # 결과 분석
+    print(f"\n📊 Answer distribution:")
+    for answer in ['A', 'B', 'C', 'D']:
+        count = results.count(answer)
+        print(f"   {answer}: {count} ({count/len(results)*100:.1f}%)")
+    
+    print("\n🎉 VQA inference completed successfully!")
+
+if __name__ == "__main__":
+    main() 

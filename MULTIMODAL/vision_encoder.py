@@ -15,7 +15,7 @@ try:
     vmamba_path = os.path.join(os.path.dirname(__file__), 'vmamba.py')
     if os.path.exists(vmamba_path):
         sys.path.insert(0, os.path.dirname(__file__))
-        from vmamba import vmamba_tiny_s1l8, VSSM
+        from vmamba import vmamba_tiny_s1l8, vmamba_base_s2l15, VSSM
         VMAMBA_AVAILABLE = True
         print("✅ VMamba loaded successfully from vmamba.py")
     else:
@@ -36,7 +36,7 @@ except ImportError:
 class VMambaBackbone(nn.Module):
     """VMamba 백본 (vmamba.py 사용)"""
     
-    def __init__(self, model_name='vmamba_tiny_s1l8', pretrained=True, output_dim=768):
+    def __init__(self, model_name='vmamba_base_s2l15', pretrained=True, output_dim=1024):
         super().__init__()
         
         if not VMAMBA_AVAILABLE:
@@ -51,6 +51,10 @@ class VMambaBackbone(nn.Module):
             print(f"   Using vmamba_tiny_s1l8 with pretrained={pretrained}")
             self.backbone = vmamba_tiny_s1l8(pretrained=pretrained, channel_first=True)
             print(f"   ✅ vmamba_tiny_s1l8 model created successfully")
+        elif model_name == 'vmamba_base_s2l15':
+            print(f"   Using vmamba_base_s2l15 with pretrained={pretrained}")
+            self.backbone = vmamba_base_s2l15(pretrained=pretrained, channel_first=True)
+            print(f"   ✅ vmamba_base_s2l15 model created successfully")
         else:
             print(f"   Using VSSM class with custom config")
             # 기본적으로 VSSM 클래스 사용
@@ -98,6 +102,9 @@ class VMambaBackbone(nn.Module):
             
         print(f"VMamba backbone initialized: {model_name}")
         print(f"Feature dimension: {self.feature_dim} -> {output_dim}")
+        print(f"Projection layer: {'Yes' if self.projection is not None else 'No'}")
+        if self.projection is not None:
+            print(f"Projection shape: {self.projection.in_features} -> {self.projection.out_features}")
     
     def load_pretrained_weights(self, pretrained_path):
         """VMamba 전용 가중치 로딩"""
@@ -133,8 +140,11 @@ class VMambaBackbone(nn.Module):
                 features = self.extract_features(dummy_input)
                 return features.shape[1]
         except:
-            # 기본값 반환
-            return 768
+            # VMamba Base의 경우 1024차원, 그 외는 768차원 기본값
+            if 'base' in self.model_name:
+                return 1024
+            else:
+                return 768
     
     def extract_features(self, x):
         """VMamba에서 피처 추출"""
@@ -163,9 +173,14 @@ class VMambaBackbone(nn.Module):
     
     def forward(self, x):
         features = self.extract_features(x)
+        print(f"🔍 VMambaBackbone: After extract_features shape: {features.shape}")
         
         if self.projection is not None:
+            print(f"🔍 VMambaBackbone: Applying projection {self.projection.in_features} -> {self.projection.out_features}")
             features = self.projection(features)
+            print(f"🔍 VMambaBackbone: After projection shape: {features.shape}")
+        else:
+            print(f"🔍 VMambaBackbone: No projection, using features directly")
             
         return features
 
@@ -217,7 +232,7 @@ class ResNetBackbone(nn.Module):
 class MambaNeck(nn.Module):
     """Mamba 기반 Feature Neck (간단화된 버전)"""
     
-    def __init__(self, in_dim=768, out_dim=768, hidden_dim=512):
+    def __init__(self, in_dim=1024, out_dim=768, hidden_dim=512):
         super().__init__()
         
         self.in_dim = in_dim
@@ -254,12 +269,19 @@ class VisionEncoder(nn.Module):
         # 백본 선택
         if VMAMBA_AVAILABLE and model_name.startswith('vmamba'):
             print("🔥 Using VMamba backbone")
+            # VMamba Base 모델의 경우 1024차원 출력
+            if 'base' in model_name:
+                backbone_output_dim = 1024 if not use_neck else 1024
+                backbone_dim = 1024
+            else:
+                backbone_output_dim = output_dim if not use_neck else 768
+                backbone_dim = 768
+                
             self.backbone = VMambaBackbone(
                 model_name=model_name,
                 pretrained=False,  # 내부 다운로드 방지
-                output_dim=output_dim if not use_neck else 768
+                output_dim=backbone_output_dim
             )
-            backbone_dim = 768
             
             # 사전 학습된 가중치 로딩 (VMambaBackbone에서 직접 처리)
             if pretrained_path and os.path.exists(pretrained_path):
@@ -279,7 +301,7 @@ class VisionEncoder(nn.Module):
             self.neck = MambaNeck(
                 in_dim=backbone_dim,
                 out_dim=output_dim,
-                hidden_dim=512
+                hidden_dim=min(512, backbone_dim//2)  # hidden_dim도 동적으로 조정
             )
         else:
             self.neck = None
@@ -448,6 +470,10 @@ AVAILABLE_MODELS = {
     'vmamba_tiny_s1l8': {
         'description': 'VMamba Tiny model with s1l8 configuration',
         'pretrained_url': 'https://github.com/MzeroMiko/VMamba/releases/download/%23v2cls/vssm1_tiny_0230s_ckpt_epoch_264.pth',
+    },
+    'vmamba_base_s2l15': {
+        'description': 'VMamba Base model with s2l15 configuration',
+        'pretrained_url': 'https://github.com/MzeroMiko/VMamba/releases/download/%23v2cls/vssm_base_0229_ckpt_epoch_237.pth',
     },
     'resnet18': {
         'description': 'ResNet-18 backbone (fallback)',

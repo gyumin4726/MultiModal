@@ -105,10 +105,11 @@ def load_models():
         print("🖼️ Loading Vision Encoder...")
         try:
             vision_encoder = load_vision_encoder(
-                model_name='vmamba_tiny_s1l8',
-                pretrained_path='./vssm1_tiny_0230s_ckpt_epoch_264.pth',
-                output_dim=768,
-                frozen_stages=1
+                model_name='vmamba_base_s2l15',
+                pretrained_path='./vssm_base_0229_ckpt_epoch_237.pth',
+                output_dim=1024,
+                frozen_stages=1,
+                use_neck=False
             ).to(device)
             models['vision_encoder'] = vision_encoder
             vision_params = count_parameters(vision_encoder)
@@ -124,7 +125,7 @@ def load_models():
         try:
             text_encoder = load_text_encoder(
                 model_type='default',
-                output_dim=768,
+                output_dim=1024,
                 device=device
             )
             models['text_encoder'] = text_encoder
@@ -161,10 +162,10 @@ def load_models():
         print("🔗 Loading MultiModal Fusion...")
         try:
             multimodal_fusion = MultiModalFusion(
-                vision_dim=768,
-                text_dim=768,
-                hidden_dim=512,
-                output_dim=768
+                vision_dim=1024,
+                text_dim=1024,
+                hidden_dim=1024,
+                output_dim=1024
             ).to(device)
             models['multimodal_fusion'] = multimodal_fusion
             fusion_params = count_parameters(multimodal_fusion)

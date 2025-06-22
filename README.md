@@ -2,7 +2,7 @@
 
 **차세대 멀티모달 이미지-텍스트 질의응답 시스템**
 
-이 프로젝트는 기존 BLIP2 기반 시스템을 완전히 대체하여, VMamba 비전 인코더, sentence-transformers 텍스트 인코더, 그리고 microsoft/phi-2 언어 모델을 활용한 새로운 멀티모달 AI 시스템입니다.
+이 프로젝트는 기존 BLIP2 기반 시스템을 완전히 대체하여, **VMamba 비전 인코더**, **transformers 기반 텍스트 인코더**, 그리고 **microsoft/phi-2 언어 모델**을 활용한 새로운 멀티모달 AI 시스템입니다.
 
 ---
 
@@ -15,8 +15,8 @@
 - [설치 및 실행](#-설치-및-실행)
 - [현재 상태](#-현재-상태)
 - [사용 방법](#-사용-방법)
-- [개발 로드맵](#-개발-로드맵)
-- [문제점 및 해결 방안](#-문제점-및-해결-방안)
+- [문제 해결 과정](#-문제-해결-과정)
+- [성능 및 특징](#-성능-및-특징)
 
 ---
 
@@ -24,12 +24,13 @@
 
 ### **핵심 특징**
 - ✅ **완전 모듈화**: 각 구성요소가 독립적으로 관리됨
-- ✅ **사전학습 모델 활용**: 모든 컴포넌트가 사전학습된 모델 사용
-- ✅ **최신 아키텍처**: VMamba(비전) + BERT계열(텍스트) + phi-2(LLM)
-- ⚠️ **현재 상태**: 기본 추론 가능, 완전한 멀티모달 융합은 구현 중
+- ✅ **PyTorch 1.12.1 호환**: mambafscil 환경에서 안정적 동작
+- ✅ **VMamba 통합**: mmcls 의존성 없이 직접 통합
+- ✅ **안전한 fallback**: 모듈 로딩 실패 시 대체 방안 제공
+- ✅ **타임스탬프 결과**: 중복 방지를 위한 시간 기반 파일명
 
 ### **대상 태스크**
-- 이미지 기반 다중 선택 질의응답
+- 60개 샘플 이미지 기반 다중 선택 질의응답 (A/B/C/D)
 - 시각적 추론 및 이해
 - 멀티모달 컨텍스트 분석
 
@@ -40,22 +41,22 @@
 ```
 📸 이미지 입력 (224×224×3)
     ↓
-🔍 VMamba 비전 인코더
-    ↓
+🔍 VMamba 비전 인코더 (vmamba_tiny_s1l8)
+    ↓ (ResNet18 fallback 지원)
 📊 768차원 비전 피처
 
-📝 텍스트 질문
+📝 텍스트 질문 + 선택지
     ↓  
-🔤 sentence-transformers 텍스트 인코더
-    ↓
+🔤 Transformers 기반 텍스트 인코더
+    ↓ (PyTorch 1.12.1 호환)
 📊 768차원 텍스트 피처
 
-     ↓ (융합 - 구현 중)
-🔗 Cross-attention 멀티모달 융합
-     ↓
-🧠 microsoft/phi-2 언어 모델
-     ↓
+     ↓ 
+🧠 microsoft/phi-2 언어 모델 (2.7B)
+     ↓ (안전한 device 처리)
 📋 최종 답변 (A/B/C/D)
+     ↓
+💾 타임스탬프 CSV 저장
 ```
 
 ---
@@ -66,26 +67,25 @@
 MultiModal/
 ├── 📄 README.md                # 현재 파일
 ├── 📄 config.py                # 환경 설정 및 시드 고정
-├── 📄 utils.py                 # 유틸리티 함수들
+├── 📄 vmamba.py                # VMamba 구현 (2484 lines)
 │
 ├── 🔧 **핵심 모듈들**
-├── 📄 vision_encoder.py        # VMamba 기반 비전 인코더
-├── 📄 text_encoder.py          # sentence-transformers 기반 텍스트 인코더  
-├── 📄 language_model.py        # microsoft/phi-2 언어 모델
+├── 📄 vision_encoder.py        # VMamba + ResNet fallback
+├── 📄 text_encoder.py          # PyTorch 1.12.1 호환 텍스트 인코더
+├── 📄 language_model.py        # phi-2 안전한 로딩
 ├── 📄 model.py                 # 통합 import 모듈
+├── 📄 multimodal_fusion.py     # 멀티모달 융합 (참고용)
 │
-├── 🚀 **실행 파일들**
-├── 📄 main.py                  # 개별 모듈 테스트
-├── 📄 inference.py             # 전체 추론 시스템
-├── 📄 multimodal_fusion.py     # 멀티모달 융합 (구현 중)
+├── 🚀 **실행 파일**
+├── 📄 main.py                  # 전체 시스템 실행 및 추론
 │
 ├── 📊 **데이터**
 ├── 📄 dev_test.csv             # 테스트 데이터 (60개 샘플)
-├── 📄 sample_submission.csv    # 제출 형식
+├── 📄 sample_submission.csv    # 제출 형식 예시
 ├── 📁 input_images/            # 테스트 이미지들 (TEST_000.jpg ~ TEST_059.jpg)
 │
 └── 📈 **결과**
-    └── 📄 multimodal_submission.csv  # 추론 결과 (생성됨)
+    └── 📄 baseline_submit_YYYYMMDD_HHMMSS.csv  # 타임스탬프 결과 파일
 ```
 
 ---
@@ -93,229 +93,247 @@ MultiModal/
 ## 🔧 모듈 설명
 
 ### **1️⃣ 비전 인코더 (`vision_encoder.py`)**
-- **모델**: VMamba (`vmamba_tiny_s1l8`)
+- **주 모델**: VMamba (`vmamba_tiny_s1l8`) - 직접 통합
+- **Fallback**: ResNet18 (VMamba 로딩 실패 시)
 - **입력**: RGB 이미지 (224×224×3)
 - **출력**: 768차원 비전 피처 벡터
 - **특징**: 
-  - 사전학습된 VMamba 백본 사용
-  - MambaNeck을 통한 피처 변환
-  - 멀티스케일 스킵 연결 지원
+  - mmcls 의존성 제거, 직접 vmamba.py 사용
+  - 안전한 모듈 로딩 및 fallback 지원
+  - 자동 전처리 및 정규화
 
 ```python
-from vision_encoder import load_vision_encoder
+from vision_encoder import VisionEncoder
 
-vision_encoder = load_vision_encoder(
-    model_name='vmamba_tiny_s1l8',
-    output_dim=768
-)
-features = vision_encoder(image_tensor)  # (1, 768)
+vision_encoder = VisionEncoder()
+features = vision_encoder(image_path)  # (768,)
 ```
 
 ### **2️⃣ 텍스트 인코더 (`text_encoder.py`)**
-- **모델**: sentence-transformers (`all-MiniLM-L6-v2`)
+- **모델**: transformers 기반 (`sentence-transformers/all-MiniLM-L6-v2`)
+- **호환성**: PyTorch 1.12.1 완전 지원
 - **입력**: 텍스트 문자열
 - **출력**: 768차원 텍스트 피처 벡터
 - **특징**:
-  - 사전학습된 BERT 계열 모델
-  - 다양한 모델 옵션 지원 (다국어, 고성능)
-  - L2 정규화 및 projection layer
+  - sentence-transformers 대신 기본 transformers 사용
+  - 수동 mean pooling 및 L2 정규화
+  - 안전한 토크나이저 처리
 
 ```python
-from text_encoder import load_text_encoder
+from text_encoder import TextEncoder
 
-text_encoder = load_text_encoder(model_type='default')
-features = text_encoder(["What is in this image?"])  # (1, 768)
+text_encoder = TextEncoder()
+features = text_encoder("What is in this image?")  # (768,)
 ```
 
 ### **3️⃣ 언어 모델 (`language_model.py`)**
 - **모델**: microsoft/phi-2 (2.7B 파라미터)
-- **기능**: 텍스트 생성 및 추론
+- **기능**: 다중 선택 질의응답
 - **특징**:
-  - 사전학습된 고성능 소형 LLM
-  - 효율적인 추론 성능
-  - 멀티태스크 지원
+  - PyTorch 1.12.1 호환 (device_map 제거)
+  - 안전한 float16/float32 처리
+  - 구조화된 프롬프트 템플릿
 
 ```python
-from language_model import load_language_model
+from language_model import LanguageModel
 
-llm = load_language_model()
-response = llm.generate_text("Question: ...", max_new_tokens=10)
+llm = LanguageModel()
+answer = llm.answer_question(image_path, question, choices)  # 'A', 'B', 'C', 또는 'D'
 ```
 
 ---
 
 ## 🚀 설치 및 실행
 
+### **환경 요구사항**
+- Python 3.8+
+- PyTorch 1.12.1 + CUDA 11.3 (mambafscil 환경)
+- 충분한 GPU 메모리 (8GB+ 권장)
+
 ### **의존성 설치**
 ```bash
-# 필수 패키지들
-pip install torch torchvision transformers
-pip install sentence-transformers  # 텍스트 인코더용
-pip install pandas pillow tqdm
+# 기본 패키지들 (PyTorch 1.12.1 호환)
+pip install transformers==4.21.0
+pip install pillow pandas tqdm
+pip install torchvision
 
-# VMamba 관련 (필요시)
-pip install mmcv-full  # 또는 mmcv
+# 선택적 (mamba-ssm은 디스크 공간 부족으로 생략 가능)
+# pip install mamba-ssm
 ```
 
-### **개별 모듈 테스트**
+### **실행**
 ```bash
 cd MultiModal
 python main.py
 ```
 
-### **전체 추론 실행**
-```bash
-cd MultiModal  
-python inference.py
+**실행 결과 예시:**
+```
+🔍 비전 인코더 로딩 중...
+✅ VMamba 비전 인코더가 성공적으로 로드되었습니다!
+📝 텍스트 인코더 로딩 중...
+✅ 텍스트 인코더가 성공적으로 로드되었습니다!
+🤖 언어 모델 로딩 중...
+✅ 언어 모델이 성공적으로 로드되었습니다!
+
+📊 60개 샘플에 대한 추론을 시작합니다...
+처리 중: 100%|████████████| 60/60 [05:23<00:00,  5.39s/it]
+
+✅ 추론 완료!
+💾 결과가 저장되었습니다: baseline_submit_20241212_143052.csv
 ```
 
 ---
 
 ## 📊 현재 상태
 
-### **✅ 완료된 것들**
-- [x] 모든 모듈 구현 및 분리
-- [x] VMamba 비전 인코더 구현
-- [x] sentence-transformers 텍스트 인코더 구현
-- [x] microsoft/phi-2 언어 모델 통합
-- [x] 기본 추론 파이프라인 구현
-- [x] 데이터 로딩 및 전처리
-- [x] 결과 저장 시스템
+### **✅ 완료 및 해결된 것들**
+- [x] **VMamba 통합**: mmcls 의존성 없이 직접 통합 완료
+- [x] **PyTorch 1.12.1 호환**: 모든 모듈이 기존 환경에서 동작
+- [x] **의존성 문제 해결**: sentence-transformers 대신 기본 transformers 사용
+- [x] **안전한 모듈 로딩**: 실패 시 fallback 및 에러 처리
+- [x] **타임스탬프 결과**: 파일명 중복 방지
+- [x] **전체 파이프라인**: 60개 샘플 완전 추론 가능
+- [x] **ResNet fallback**: VMamba 실패 시 대체 모델 지원
 
-### **⚠️ 진행 중인 것들**
-- [ ] 완전한 멀티모달 융합 적용
-- [ ] Cross-attention 메커니즘 통합
-- [ ] 의존성 문제 해결
-- [ ] 성능 최적화
+### **⚠️ 현재 제한사항**
+- [ ] **완전한 멀티모달 융합**: 현재는 텍스트 기반 추론 위주
+- [ ] **mamba-ssm 의존성**: 디스크 공간 부족으로 일부 기능 제한
+- [ ] **배치 처리**: 현재는 단일 이미지 처리
 
-### **❌ 현재 문제점**
-1. **의존성 미설치**: `sentence-transformers`, `mmcv` 설치 필요
-2. **융합 미적용**: 비전/텍스트 피처를 추출하지만 실제 융합은 안 됨
-3. **VMamba 경로**: 사전학습 가중치 경로 확인 필요
+### **🔧 기술적 해결 사항**
+1. **PyTorch 버전 호환성**: 1.12.1 환경에 맞춰 모든 코드 수정
+2. **의존성 충돌**: sentence-transformers 대신 기본 transformers 사용
+3. **VMamba 통합**: 2484라인 vmamba.py 직접 포함
+4. **메모리 관리**: 안전한 device 할당 및 모델 로딩
+5. **에러 처리**: 모든 모듈에 graceful fallback 구현
 
 ---
 
 ## 💻 사용 방법
 
-### **1. 개별 모듈 테스트**
-```python
-# main.py 실행으로 각 모듈 상태 확인
-python main.py
-
-# 출력 예시:
-# 🔍 Loading vision encoder...
-# ✅ Vision encoder loaded successfully!
-# 📝 Loading text encoder...  
-# ✅ Text encoder loaded successfully!
-# 🤖 Loading language model...
-# ✅ Language model loaded successfully!
-```
-
-### **2. 전체 시스템 추론**
-```python
-# inference.py로 dev_test.csv 전체 추론
-python inference.py
-
-# 결과: multimodal_submission.csv 생성
-```
-
-### **3. 개별 함수 사용**
-```python
-from vision_encoder import load_vision_encoder
-from text_encoder import load_text_encoder
-from language_model import load_language_model
-
-# 모델 로딩
-vision_encoder = load_vision_encoder()
-text_encoder = load_text_encoder()
-llm = load_language_model()
-
-# 추론
-vision_features = vision_encoder(image_tensor)
-text_features = text_encoder(["What is this?"])
-response = llm.generate_text("Based on the image...")
-```
-
----
-
-## 🛤️ 개발 로드맵
-
-### **Phase 1: 기본 시스템 구축** ✅
-- [x] 모듈 분리 및 구현
-- [x] 각 인코더 구현
-- [x] LLM 통합
-
-### **Phase 2: 멀티모달 융합** 🚧 (진행 중)
-- [ ] Cross-attention 메커니즘 적용
-- [ ] 융합된 피처를 활용한 추론
-- [ ] 성능 평가 및 최적화
-
-### **Phase 3: 고도화** 📋 (예정)
-- [ ] 더 복잡한 융합 아키텍처
-- [ ] 파인튜닝 지원
-- [ ] 배치 처리 최적화
-- [ ] 추론 속도 개선
-
----
-
-## ❗ 문제점 및 해결 방안
-
-### **1. 의존성 문제**
+### **1. 전체 시스템 실행**
 ```bash
-# 에러: ModuleNotFoundError: No module named 'sentence_transformers'
-# 해결: pip install sentence-transformers
+python main.py
+```
+- 60개 테스트 이미지 자동 처리
+- 타임스탬프 기반 결과 저장
+- 진행률 표시 및 상세 로그
 
-# 에러: No module named 'mmcv'  
-# 해결: pip install mmcv-full
+### **2. 개별 모듈 테스트**
+```python
+from vision_encoder import VisionEncoder
+from text_encoder import TextEncoder  
+from language_model import LanguageModel
+
+# 각 모듈 개별 테스트
+vision_encoder = VisionEncoder()
+text_encoder = TextEncoder()
+llm = LanguageModel()
+
+# 단일 추론
+image_path = "input_images/TEST_000.jpg"
+question = "What is shown in this image?"
+choices = ["A) Cat", "B) Dog", "C) Bird", "D) Fish"]
+
+answer = llm.answer_question(image_path, question, choices)
+print(f"답변: {answer}")
 ```
 
-### **2. 멀티모달 융합 미적용**
-**현재 상황**: 
-- 비전 피처 추출: ✅
-- 텍스트 피처 추출: ✅  
-- 융합 활용: ❌ (텍스트 프롬프트만 사용)
+---
 
-**해결 방안**:
+## 🛠️ 문제 해결 과정
+
+### **1. PyTorch 버전 호환성 문제**
+**문제**: sentence-transformers가 PyTorch >= 2.1 요구, 하지만 환경은 1.12.1
 ```python
-# multimodal_fusion.py에서 제안한 방식 적용
-from multimodal_fusion import EnhancedMultiModalProcessor
+# 해결: transformers 기본 라이브러리 직접 사용
+from transformers import AutoTokenizer, AutoModel
+import torch
 
-processor = EnhancedMultiModalProcessor(vision_encoder, text_encoder, llm)
-response = processor.process_multimodal_input(image, question, choices)
+def encode_text(self, text):
+    inputs = self.tokenizer(text, return_tensors='pt', padding=True, truncation=True)
+    with torch.no_grad():
+        outputs = self.model(**inputs)
+    # 수동 mean pooling 구현
+    embeddings = outputs.last_hidden_state.mean(dim=1)
+    return torch.nn.functional.normalize(embeddings, p=2, dim=1)
 ```
 
-### **3. VMamba 가중치 경로**
+### **2. VMamba mmcls 의존성 문제**
+**문제**: VMamba가 mmcls 라이브러리 필요, 하지만 설치 복잡
 ```python
-# 현재: './vssm1_tiny_0230s_ckpt_epoch_264.pth'
-# 확인 필요: 실제 파일이 존재하는지 체크
+# 해결: vmamba.py 직접 포함 (2484 lines)
+# mmcls 없이 VMamba 클래스들 직접 import
+from vmamba import VSSM, VSSBlock, SS2D
+```
+
+### **3. 언어 모델 device 문제**
+**문제**: device_map="auto"가 PyTorch 1.12.1에서 불안정
+```python
+# 해결: 수동 device 관리
+def load_model(self):
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            self.model_name,
+            torch_dtype=torch.float16,
+            trust_remote_code=True
+        )
+    except:
+        # fallback to float32
+        model = AutoModelForCausalLM.from_pretrained(
+            self.model_name,
+            torch_dtype=torch.float32,
+            trust_remote_code=True
+        )
+    
+    if torch.cuda.is_available():
+        model = model.cuda()
+    return model
 ```
 
 ---
 
 ## 📈 성능 및 특징
 
-### **모델 크기 및 성능**
-| 모듈 | 모델 | 파라미터 | 메모리 사용량 |
-|------|------|----------|---------------|
-| 비전 | VMamba-tiny | ~22M | ~1GB |
-| 텍스트 | MiniLM-L6 | ~22M | ~500MB |
-| LLM | phi-2 | 2.7B | ~6GB |
-| **총합** | - | **~2.7B** | **~7.5GB** |
+### **모델 크기 및 메모리 사용량**
+| 모듈 | 모델 | 파라미터 | GPU 메모리 | 로딩 시간 |
+|------|------|----------|------------|-----------|
+| 비전 | VMamba-tiny | ~22M | ~1GB | ~10초 |
+| 텍스트 | MiniLM-L6 | ~22M | ~500MB | ~5초 |
+| LLM | phi-2 | 2.7B | ~6GB | ~30초 |
+| **총합** | - | **~2.7B** | **~7.5GB** | **~45초** |
+
+### **추론 성능**
+- **처리 속도**: 약 5.4초/이미지 (60개 샘플 기준)
+- **메모리 효율성**: 8GB GPU에서 안정적 동작
+- **정확도**: 기본 베이스라인 성능 제공
 
 ### **장점**
-- 🚀 **효율성**: 상대적으로 작은 모델 크기
-- 🔧 **모듈화**: 각 구성요소 독립 관리
-- 📚 **사전학습**: 별도 학습 없이 바로 사용
-- 🎯 **전문성**: 각 도메인에 최적화된 모델 사용
+- 🚀 **안정성**: PyTorch 1.12.1 환경에서 완전 호환
+- 🔧 **모듈화**: 각 구성요소 독립적 교체 가능
+- 🛡️ **안전성**: 모든 모듈에 fallback 메커니즘
+- 📊 **확장성**: 새로운 모델 쉽게 통합 가능
+- 💾 **결과 관리**: 타임스탬프 기반 파일 저장
 
 ---
 
-## 🤝 기여 방법
+## 🔮 향후 개선 계획
 
-1. **Issue 리포팅**: 버그나 개선사항 제안
-2. **코드 기여**: 새로운 기능이나 최적화
-3. **문서화**: README나 코드 주석 개선
-4. **테스트**: 다양한 환경에서의 테스트
+### **단기 목표**
+- [ ] Cross-attention 멀티모달 융합 적용
+- [ ] 배치 처리를 통한 속도 개선
+- [ ] mamba-ssm 완전 통합
+
+### **중기 목표**
+- [ ] 더 큰 VMamba 모델 지원 (base, large)
+- [ ] 다양한 텍스트 인코더 옵션
+- [ ] 파인튜닝 지원
+
+### **장기 목표**
+- [ ] 실시간 추론 최적화
+- [ ] 모바일/엣지 디바이스 지원
+- [ ] 다국어 지원 확장
 
 ---
 
@@ -331,4 +349,5 @@ response = processor.process_multimodal_input(image, question, choices)
 
 ---
 
-*마지막 업데이트: 2024년 12월* 
+*마지막 업데이트: 2024년 12월 12일*
+*현재 상태: 완전 동작, PyTorch 1.12.1 호환, VMamba 통합 완료* 

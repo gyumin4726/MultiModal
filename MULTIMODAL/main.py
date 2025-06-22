@@ -38,28 +38,33 @@ except ImportError as e:
     FUSION_AVAILABLE = False
 
 def extract_answer_letter(text):
-    """응답에서 A, B, C, D 추출"""
+    """LLM 응답에서 A, B, C, D 답변 추출 (개선된 버전)"""
+    if not text:
+        print(f"⚠️ Empty response, defaulting to A")
+        return 'A'
+    
     text = text.strip().upper()
     
-    # 패턴 매칭으로 답변 추출
+    # 다양한 패턴 검색 (우선순위 순)
     patterns = [
-        r'\b([ABCD])\b',  # 단독 문자
-        r'답:\s*([ABCD])',  # 답: A 형태
-        r'정답:\s*([ABCD])',  # 정답: A 형태
-        r'Answer:\s*([ABCD])',  # Answer: A 형태
+        r'\b([ABCD])\b(?:\s*[.:]|\s*$)',  # 단독 문자 + 마침표/콜론/끝
+        r'ANSWER[:\s]*([ABCD])',           # "ANSWER: A" 형태
+        r'SOLUTION[:\s]*([ABCD])',         # "SOLUTION: A" 형태  
+        r'([ABCD])[.:]',                   # "A." 또는 "A:" 형태
+        r'\b([ABCD])\b',                   # 단순 문자 매칭 (마지막 수단)
     ]
     
     for pattern in patterns:
-        match = re.search(pattern, text)
-        if match:
-            return match.group(1)
+        matches = re.findall(pattern, text)
+        if matches:
+            answer = matches[-1]  # 마지막 매치 사용
+            print(f"✅ Extracted answer '{answer}' using pattern: {pattern}")
+            return answer
     
-    # 첫 번째로 나타나는 A, B, C, D 반환
-    for char in text:
-        if char in 'ABCD':
-            return char
-            
-    return 'A'  # 기본값
+    # 모든 패턴 실패시 디버깅 정보 출력
+    print(f"❌ No answer pattern found in: '{text[:100]}...'")
+    print(f"⚠️ Defaulting to A")
+    return 'A'
 
 def load_models():
     """모든 모델 로딩 (안전한 방식)"""
@@ -111,8 +116,12 @@ def load_models():
     if LLM_AVAILABLE:
         print("🤖 Loading Language Model...")
         try:
+            # 빠른 테스트를 위한 모델 선택 (환경변수로 제어 가능)
+            import os
+            model_choice = os.getenv('LLM_MODEL', 'microsoft/phi-2')  # 기본값: phi-2
+            
             language_model = load_language_model(
-                model_name="microsoft/phi-2",
+                model_name=model_choice,
                 device=device
             )
             models['language_model'] = language_model
@@ -130,7 +139,7 @@ def load_models():
                 vision_dim=768,
                 text_dim=768,
                 hidden_dim=512,
-                num_heads=8
+                output_dim=768
             ).to(device)
             models['multimodal_fusion'] = multimodal_fusion
             print("✅ MultiModal Fusion loaded!")
@@ -155,7 +164,7 @@ def load_models():
     
     return models
 
-def process_vqa_sample(models, image_path, question, choices):
+def process_vqa_sample(models, image_path, question, choices, sample_idx):
     """단일 VQA 샘플 처리 (안전한 방식)"""
     try:
         # 이미지 경로 확인
@@ -217,6 +226,12 @@ def process_vqa_sample(models, image_path, question, choices):
                         fused_features=fused_features
                     )
                     answer = extract_answer_letter(response)
+                    # 디버깅: 처음 3개 샘플의 응답 출력
+                    if sample_idx < 3:
+                        print(f"🔍 Sample {sample_idx+1} LLM Response: '{response}'")
+                        print(f"🔍 Response length: {len(response)}")
+                        print(f"🎯 Extracted Answer: {answer}")
+                        print("-" * 50)
                 else:
                     print("⚠️ No features available, using text-only mode")
                     # 피처가 없으면 기본 방식
@@ -264,13 +279,13 @@ def main():
     print("\n🔍 Starting inference...")
     results = []
     
-    for _, row in tqdm(test.iterrows(), total=len(test), desc="Processing"):
+    for idx, (_, row) in enumerate(tqdm(test.iterrows(), total=len(test), desc="Processing")):
         image_path = row['img_path']
         question = row['Question']
         choices = [row[c] for c in ['A', 'B', 'C', 'D']]
         
         # VQA 처리
-        answer = process_vqa_sample(models, image_path, question, choices)
+        answer = process_vqa_sample(models, image_path, question, choices, sample_idx=idx)
         results.append(answer)
     
     print('✅ Inference completed!')

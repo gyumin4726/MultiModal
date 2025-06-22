@@ -66,6 +66,23 @@ def extract_answer_letter(text):
     print(f"⚠️ Defaulting to A")
     return 'A'
 
+def count_parameters(model):
+    """모델의 총 파라미터 개수 계산"""
+    if model is None:
+        return 0
+    return sum(p.numel() for p in model.parameters())
+
+def format_parameter_count(count):
+    """파라미터 개수를 읽기 쉬운 형태로 변환"""
+    if count >= 1e9:
+        return f"{count/1e9:.2f}B"
+    elif count >= 1e6:
+        return f"{count/1e6:.2f}M"
+    elif count >= 1e3:
+        return f"{count/1e3:.2f}K"
+    else:
+        return str(count)
+
 def load_models():
     """모든 모델 로딩 (안전한 방식)"""
     print("🚀 Loading MultiModal VQA System...")
@@ -81,6 +98,8 @@ def load_models():
         'device': device
     }
     
+    total_params = 0
+    
     # Vision Encoder (선택적)
     if VISION_AVAILABLE:
         print("🖼️ Loading Vision Encoder...")
@@ -92,7 +111,9 @@ def load_models():
                 frozen_stages=1
             ).to(device)
             models['vision_encoder'] = vision_encoder
-            print("✅ Vision Encoder loaded!")
+            vision_params = count_parameters(vision_encoder)
+            total_params += vision_params
+            print(f"✅ Vision Encoder loaded! Parameters: {format_parameter_count(vision_params)}")
         except Exception as e:
             print(f"Warning: VMamba not available - {e}")
             models['vision_encoder'] = None
@@ -107,7 +128,9 @@ def load_models():
                 device=device
             )
             models['text_encoder'] = text_encoder
-            print("✅ Text Encoder loaded!")
+            text_params = count_parameters(text_encoder)
+            total_params += text_params
+            print(f"✅ Text Encoder loaded! Parameters: {format_parameter_count(text_params)}")
         except Exception as e:
             print(f"Warning: Text Encoder failed - {e}")
             models['text_encoder'] = None
@@ -125,7 +148,9 @@ def load_models():
                 device=device
             )
             models['language_model'] = language_model
-            print("✅ Language Model loaded!")
+            llm_params = count_parameters(language_model)
+            total_params += llm_params
+            print(f"✅ Language Model loaded! Parameters: {format_parameter_count(llm_params)}")
         except Exception as e:
             print(f"Warning: Language Model failed - {e}")
             print("    Falling back to text-only mode...")
@@ -142,7 +167,9 @@ def load_models():
                 output_dim=768
             ).to(device)
             models['multimodal_fusion'] = multimodal_fusion
-            print("✅ MultiModal Fusion loaded!")
+            fusion_params = count_parameters(multimodal_fusion)
+            total_params += fusion_params
+            print(f"✅ MultiModal Fusion loaded! Parameters: {format_parameter_count(fusion_params)}")
         except Exception as e:
             print(f"Warning: MultiModal Fusion failed - {e}")
             models['multimodal_fusion'] = None
@@ -161,6 +188,11 @@ def load_models():
     print(f"   Text Encoder: {'✅' if models['text_encoder'] else '❌'}")
     print(f"   Language Model: {'✅' if models['language_model'] else '❌'}")
     print(f"   Multimodal Fusion: {'✅' if models['multimodal_fusion'] else '❌'}")
+    
+    # 총 파라미터 개수 출력
+    print("\n🔢 Total Parameter Count:")
+    print(f"   Combined Models: {format_parameter_count(total_params)} parameters")
+    print(f"   Exact Count: {total_params:,} parameters")
     
     return models
 

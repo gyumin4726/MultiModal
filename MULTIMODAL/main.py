@@ -8,37 +8,14 @@ from config import seed_everything
 import os
 from datetime import datetime
 
-# 모듈 임포트 (안전한 방식으로)
-try:
-    from vision_encoder import load_vision_encoder
-    VISION_AVAILABLE = True
-except ImportError as e:
-    print(f"Warning: Vision encoder not available - {e}")
-    VISION_AVAILABLE = False
-
-try:
-    from text_encoder import load_text_encoder
-    TEXT_AVAILABLE = True
-except ImportError as e:
-    print(f"Warning: Text encoder not available - {e}")
-    TEXT_AVAILABLE = False
-
-try:
-    from language_model import load_language_model
-    LLM_AVAILABLE = True
-except ImportError as e:
-    print(f"Warning: Language model not available - {e}")
-    LLM_AVAILABLE = False
-
-try:
-    from multimodal_fusion import MultiModalFusion
-    FUSION_AVAILABLE = True
-except ImportError as e:
-    print(f"Warning: Multimodal fusion not available - {e}")
-    FUSION_AVAILABLE = False
+# 모듈 임포트
+from model.vision_encoder import load_vision_encoder
+from model.text_encoder import load_vqa_text_encoder
+from model.language_model import load_language_model
+from model.multimodal_fusion import HierarchicalVQAFusion
 
 def extract_answer_letter(text):
-    """LLM 응답에서 A, B, C, D 답변 추출 (개선된 버전)"""
+    """LLM 응답에서 A, B, C, D 답변 추출"""
     if not text:
         print(f"⚠️ Empty response, defaulting to A")
         return 'A'
@@ -84,7 +61,7 @@ def format_parameter_count(count):
         return str(count)
 
 def load_models():
-    """모든 모델 로딩 (안전한 방식)"""
+    """모든 모델 로딩"""
     print("🚀 Loading MultiModal VQA System...")
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -100,95 +77,62 @@ def load_models():
     
     total_params = 0
     
-    # Vision Encoder (선택적)
-    if VISION_AVAILABLE:
-        print("🖼️ Loading Vision Encoder...")
-        try:
-            vision_encoder = load_vision_encoder(
-                model_name='vmamba_base_s2l15',
-                pretrained_path='./vssm_base_0229_ckpt_epoch_237.pth',
-                output_dim=1024,
-                frozen_stages=1,
-                use_neck=False
-            ).to(device)
-            models['vision_encoder'] = vision_encoder
-            vision_params = count_parameters(vision_encoder)
-            total_params += vision_params
-            print(f"✅ Vision Encoder loaded! Parameters: {format_parameter_count(vision_params)}")
-        except Exception as e:
-            print(f"Warning: VMamba not available - {e}")
-            models['vision_encoder'] = None
+    # Vision Encoder
+    print("🖼️ Loading Vision Encoder...")
+    vision_encoder = load_vision_encoder(
+        model_name='vit_large_patch16_224',  # 최고 성능 ViT 모델
+        pretrained=True,  # ImageNet 사전 훈련 가중치 사용
+        output_dim=1024,
+        frozen_stages=1,
+        use_skip_connection=True  # MASC-V 활성화
+    ).to(device)
+    models['vision_encoder'] = vision_encoder
+    vision_params = count_parameters(vision_encoder)
+    total_params += vision_params
+    print(f"✅ Vision Encoder loaded! Parameters: {format_parameter_count(vision_params)}")
     
-    # Text Encoder (선택적)
-    if TEXT_AVAILABLE:
-        print("📝 Loading Text Encoder...")
-        try:
-            text_encoder = load_text_encoder(
-                model_type='default',
-                output_dim=1024,
-                device=device
-            )
-            models['text_encoder'] = text_encoder
-            text_params = count_parameters(text_encoder)
-            total_params += text_params
-            print(f"✅ Text Encoder loaded! Parameters: {format_parameter_count(text_params)}")
-        except Exception as e:
-            print(f"Warning: Text Encoder failed - {e}")
-            models['text_encoder'] = None
+    # VQA Text Encoder
+    print("📝 Loading VQA-Optimized Text Encoder...")
+    text_encoder = load_vqa_text_encoder(
+        model_type='vqa_optimized',
+        output_dim=1024,
+        device=device
+    )
+    models['text_encoder'] = text_encoder
+    text_params = count_parameters(text_encoder)
+    total_params += text_params
+    print(f"✅ VQA Text Encoder loaded! Parameters: {format_parameter_count(text_params)}")
     
-    # Language Model (필수)
-    if LLM_AVAILABLE:
-        print("🤖 Loading Language Model...")
-        try:
-            # 빠른 테스트를 위한 모델 선택 (환경변수로 제어 가능)
-            import os
-            model_choice = os.getenv('LLM_MODEL', 'microsoft/phi-2')  # 기본값: phi-2
-            
-            language_model = load_language_model(
-                model_name=model_choice,
-                device=device
-            )
-            models['language_model'] = language_model
-            llm_params = count_parameters(language_model)
-            total_params += llm_params
-            print(f"✅ Language Model loaded! Parameters: {format_parameter_count(llm_params)}")
-        except Exception as e:
-            print(f"Warning: Language Model failed - {e}")
-            print("    Falling back to text-only mode...")
-            models['language_model'] = None
+    # Language Model
+    print("🤖 Loading Language Model...")
+    language_model = load_language_model(
+        model_name='microsoft/phi-2',
+        device=device
+    )
+    models['language_model'] = language_model
+    llm_params = count_parameters(language_model)
+    total_params += llm_params
+    print(f"✅ Language Model loaded! Parameters: {format_parameter_count(llm_params)}")
     
-    # MultiModal Fusion (선택적)
-    if FUSION_AVAILABLE and models['vision_encoder'] is not None and models['text_encoder'] is not None:
-        print("🔗 Loading MultiModal Fusion...")
-        try:
-            multimodal_fusion = MultiModalFusion(
-                vision_dim=1024,
-                text_dim=1024,
-                hidden_dim=1024,
-                output_dim=1024
-            ).to(device)
-            models['multimodal_fusion'] = multimodal_fusion
-            fusion_params = count_parameters(multimodal_fusion)
-            total_params += fusion_params
-            print(f"✅ MultiModal Fusion loaded! Parameters: {format_parameter_count(fusion_params)}")
-        except Exception as e:
-            print(f"Warning: MultiModal Fusion failed - {e}")
-            models['multimodal_fusion'] = None
+    # VQA MultiModal Fusion
+    print("🔗 Loading VQA Hierarchical Fusion...")
+    multimodal_fusion = HierarchicalVQAFusion(
+        vision_dim=1024,
+        text_dim=1024,
+        output_dim=1024
+    ).to(device)
+    models['multimodal_fusion'] = multimodal_fusion
+    fusion_params = count_parameters(multimodal_fusion)
+    total_params += fusion_params
+    print(f"✅ VQA Hierarchical Fusion loaded! Parameters: {format_parameter_count(fusion_params)}")
     
-    # Image Transform (항상 필요)
+    # Image Transform
     models['transform'] = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406],
                            std=[0.229, 0.224, 0.225])
     ])
-    
-    # 로딩된 모델 요약
-    print("\n📋 Model Loading Summary:")
-    print(f"   Vision Encoder: {'✅' if models['vision_encoder'] else '❌'}")
-    print(f"   Text Encoder: {'✅' if models['text_encoder'] else '❌'}")
-    print(f"   Language Model: {'✅' if models['language_model'] else '❌'}")
-    print(f"   Multimodal Fusion: {'✅' if models['multimodal_fusion'] else '❌'}")
     
     # 총 파라미터 개수 출력
     print("\n🔢 Total Parameter Count:")
@@ -198,90 +142,53 @@ def load_models():
     return models
 
 def process_vqa_sample(models, image_path, question, choices, sample_idx):
-    """단일 VQA 샘플 처리 (안전한 방식)"""
-    try:
-        # 이미지 경로 확인
-        if not os.path.exists(image_path):
-            print(f"Warning: Image not found: {image_path}")
-            return 'A'
-        
-        # Vision Features 추출 (선택적)
-        vision_features = None
-        if models['vision_encoder'] is not None:
-            with torch.no_grad():
-                try:
-                    vision_features = models['vision_encoder'](image_path)
-                except Exception as e:
-                    print(f"Warning: Vision encoding failed - {e}")
-        
-        # 프롬프트는 이제 LLM 내부에서 피처와 함께 구성됨
-        
-        # Text Features 추출 (선택적)
-        text_features = None
-        if models['text_encoder'] is not None:
-            with torch.no_grad():
-                try:
-                    text_features = models['text_encoder'](question)
-                except Exception as e:
-                    print(f"Warning: Text encoding failed - {e}")
-        
-        # MultiModal Fusion (선택적)
-        fused_features = None
-        if (models['multimodal_fusion'] is not None and 
-            vision_features is not None and 
-            text_features is not None):
-            with torch.no_grad():
-                try:
-                    fused_features = models['multimodal_fusion'](vision_features, text_features)
-                except Exception as e:
-                    print(f"Warning: Multimodal fusion failed - {e}")
-        
-        # 피처 추출 상태 확인 (디버깅용)
-        features_available = []
-        if vision_features is not None:
-            features_available.append(f"Vision({vision_features.shape})")
-        if text_features is not None:
-            features_available.append(f"Text({text_features.shape})")
-        if fused_features is not None:
-            features_available.append(f"Fused({fused_features.shape})")
-        
-        # LLM 추론 (피처 활용)
-        if models['language_model'] is not None:
-            try:
-                # 피처 기반 추론 시도
-                if vision_features is not None or text_features is not None or fused_features is not None:
-                    print(f"🚀 Using features: {', '.join(features_available)}")
-                    response = models['language_model'].answer_question_with_features(
-                        question=question,
-                        choices=choices,
-                        vision_features=vision_features,
-                        text_features=text_features,
-                        fused_features=fused_features
-                    )
-                    answer = extract_answer_letter(response)
-                    # 디버깅: 처음 3개 샘플의 응답 출력
-                    if sample_idx < 3:
-                        print(f"🔍 Sample {sample_idx+1} LLM Response: '{response}'")
-                        print(f"🔍 Response length: {len(response)}")
-                        print(f"🎯 Extracted Answer: {answer}")
-                        print("-" * 50)
-                else:
-                    print("⚠️ No features available, using text-only mode")
-                    # 피처가 없으면 기본 방식
-                    response = models['language_model'].answer_question_simple(question, choices)
-                    answer = extract_answer_letter(response)
-            except Exception as e:
-                print(f"Warning: LLM generation failed - {e}")
-                answer = 'A'
-        else:
-            # LLM이 없으면 단순 휴리스틱
-            answer = 'A'  # 기본값
+    """단일 VQA 샘플 처리"""
+    
+    # 문제 번호 및 구분선 출력
+    print(f"\n{'='*60}")
+    print(f"📝 Question {sample_idx + 1:02d}/60 - Processing: {image_path}")
+    print(f"{'='*60}")
+    
+    # Vision Features 추출
+    with torch.no_grad():
+        vision_features = models['vision_encoder'](image_path)
+    
+    # VQA Text Features 추출 (Question + Choices 구조화)
+    with torch.no_grad():
+        text_features, qc_attention = models['text_encoder'](question, choices)
+    
+    # MultiModal Fusion
+    with torch.no_grad():
+        fused_features = models['multimodal_fusion'](vision_features, text_features)
+    
+    # 피처 정보 출력 (디버깅용)
+    features_info = [
+        f"Vision({vision_features.shape})",
+        f"Text({text_features.shape})",
+        f"Fused({fused_features.shape})"
+    ]
+    
+    # LLM 추론 (피처 활용)
+    print(f"🚀 Using features: {', '.join(features_info)}")
+    response = models['language_model'].answer_question_with_features(
+        question=question,
+        choices=choices,
+        vision_features=vision_features,
+        text_features=text_features,
+        fused_features=fused_features
+    )
+    answer = extract_answer_letter(response)
+    
+    # 디버깅: 처음 3개 샘플의 응답 출력
+    if sample_idx < 3:
+        print(f"🔍 Sample {sample_idx+1} LLM Response: '{response}'")
+        print(f"🔍 Response length: {len(response)}")
+        print(f"🎯 Extracted Answer: {answer}")
+    
+    print(f"✅ Question {sample_idx + 1:02d} completed → Answer: {answer}")
+    print(f"{'='*60}\n")
             
-        return answer
-        
-    except Exception as e:
-        print(f"❌ Error processing sample: {e}")
-        return 'A'
+    return answer
 
 def main():
     """메인 추론 함수"""
@@ -294,26 +201,20 @@ def main():
     # 모델 로딩
     models = load_models()
     
-    # 최소한 하나의 모델이라도 로딩되었는지 확인
-    if all(v is None for k, v in models.items() if k not in ['transform', 'device']):
-        print("❌ No models loaded successfully. Exiting...")
-        return
-    
     # 데이터 로딩
     print("\n📊 Loading test data...")
-    if not os.path.exists('./dev_test.csv'):
-        print("❌ dev_test.csv not found!")
-        return
-        
-    test = pd.read_csv('./dev_test.csv')
+    test = pd.read_csv('./data/dev_test.csv')
     print(f"📋 Total samples: {len(test)}")
     
     # 추론
     print("\n🔍 Starting inference...")
     results = []
     
-    for idx, (_, row) in enumerate(tqdm(test.iterrows(), total=len(test), desc="Processing")):
-        image_path = row['img_path']
+    # tqdm을 disable하여 progress bar 대신 우리만의 출력 사용
+    for idx, (_, row) in enumerate(test.iterrows()):
+        # 이미지 경로 수정: 보다 안전한 경로 처리
+        img_filename = os.path.basename(row['img_path'])  # TEST_000.jpg 추출 
+        image_path = os.path.join('./data/input_images/', img_filename)
         question = row['Question']
         choices = [row[c] for c in ['A', 'B', 'C', 'D']]
         
@@ -328,21 +229,14 @@ def main():
     
     # 현재 날짜와 시간으로 파일명 생성
     current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_filename = f'baseline_submit_{current_time}.csv'
+    output_filename = f'vqa_enhanced_submit_{current_time}.csv'
     
-    if os.path.exists('./sample_submission.csv'):
-        submission = pd.read_csv('./sample_submission.csv')
-        submission['answer'] = results
-        submission.to_csv(f'./{output_filename}', index=False)
-        print(f"✅ Results saved to '{output_filename}'")
-    else:
-        # sample_submission.csv가 없으면 직접 생성
-        submission = pd.DataFrame({
-            'ID': range(len(results)),
-            'answer': results
-        })
-        submission.to_csv(f'./{output_filename}', index=False)
-        print(f"✅ Results saved to '{output_filename}' (created new format)")
+    submission = pd.DataFrame({
+        'ID': [f'TEST_{i:03d}' for i in range(len(results))],
+        'answer': results
+    })
+    submission.to_csv(f'./data/{output_filename}', index=False)
+    print(f"✅ Results saved to 'data/{output_filename}'")
     
     # 결과 분석
     print(f"\n📊 Answer distribution:")
@@ -350,7 +244,7 @@ def main():
         count = results.count(answer)
         print(f"   {answer}: {count} ({count/len(results)*100:.1f}%)")
     
-    print("\n🎉 VQA inference completed successfully!")
+    print("\n🎉 Enhanced VQA inference completed successfully!")
 
 if __name__ == "__main__":
     main() 

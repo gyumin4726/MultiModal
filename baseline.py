@@ -5,6 +5,7 @@ import numpy as np
 from PIL import Image
 from tqdm import tqdm
 from transformers import CLIPProcessor, CLIPModel
+from datetime import datetime
 
 # 환경 설정
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -21,8 +22,9 @@ def seed_everything(seed=42):
     torch.backends.cudnn.benchmark = False
 seed_everything()
 
-# CLIP 모델 로드
-clip_model_name = "openai/clip-vit-base-patch16"
+# CLIP 모델 로드 - LAION의 ViT-Huge 모델 사용
+clip_model_name = "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"
+print(f"✅ Loading model: {clip_model_name}")
 clip = CLIPModel.from_pretrained(clip_model_name).to(device)
 processor = CLIPProcessor.from_pretrained(clip_model_name)
 clip.eval()
@@ -58,12 +60,14 @@ for _, row in tqdm(test.iterrows(), total=len(test)):
 
 # 결과 저장
 submission['answer'] = results
-submission.to_csv('./baseline_submit.csv', index=False)
-print("✅ Done. Saved to ./baseline_submit.csv")
+current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+output_filename = f'./baseline_submit_{current_time}.csv'
+submission.to_csv(output_filename, index=False)
+print(f"✅ Done. Saved to {output_filename}")
 
 # 정확도 계산
 ground_truth = pd.read_csv('./dev_ans.csv')
-predictions = pd.read_csv('./baseline_submit.csv')
+predictions = pd.read_csv(output_filename)
 
 # dev_ans.csv의 마지막 컬럼이 정답이므로, 마지막 컬럼을 선택
 ground_truth_answers = ground_truth.iloc[:, -1]

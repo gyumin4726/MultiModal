@@ -6,7 +6,6 @@ from PIL import Image
 from tqdm import tqdm
 from transformers import CLIPProcessor, CLIPModel
 from datetime import datetime
-from ss2d import SS2D
 
 # 환경 설정
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -23,55 +22,22 @@ def seed_everything(seed=42):
     torch.backends.cudnn.benchmark = False
 seed_everything()
 
-class EnhancedCLIP(torch.nn.Module):
-    def __init__(self, clip_model_name):
-        super().__init__()
-        self.clip = CLIPModel.from_pretrained(clip_model_name)
-        
-        # SS2D 레이어 추가 - CLIP ViT-H-14의 hidden size는 1024입니다
-        self.ss2d = SS2D(
-            d_model=1024,
-            d_state=32,
-            ssm_ratio=2.0,
-            dt_rank="auto",
-            d_conv=3,
-        )
-        
-    def forward(self, image_embeds, text_embeds):
-        # 이미지 임베딩에 SS2D 적용 (B, L, D) -> (B, L, D)
-        enhanced_image_embeds, _ = self.ss2d(image_embeds)
-        
-        # 정규화된 특징 계산
-        image_embeds = enhanced_image_embeds / enhanced_image_embeds.norm(dim=-1, keepdim=True)
-        text_embeds = text_embeds / text_embeds.norm(dim=-1, keepdim=True)
-        
-        # 코사인 유사도 계산
-        logits = torch.matmul(image_embeds, text_embeds.transpose(-2, -1))
-        
-        return logits
-
 # CLIP 모델 로드 - LAION의 ViT-Huge 모델 사용
 clip_model_name = "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"
 print(f"✅ Loading model: {clip_model_name}")
-model = EnhancedCLIP(clip_model_name).to(device)
+clip = CLIPModel.from_pretrained(clip_model_name).to(device)
 processor = CLIPProcessor.from_pretrained(clip_model_name)
-model.eval()
+clip.eval()
 
 # 예측 함수
 def predict(image_path, question, choices):
     image = Image.open(image_path).convert("RGB")
     prompts = [f"{question} 선택지: {choice}" for choice in choices]
     inputs = processor(text=prompts, images=[image]*4, return_tensors="pt", padding=True).to(device)
-    
+
     with torch.no_grad():
-        # CLIP의 이미지/텍스트 임베딩 추출
-        image_features = model.clip.vision_model(inputs.pixel_values)[0]  # (B, L, D)
-        text_features = model.clip.text_model(input_ids=inputs.input_ids, 
-                                            attention_mask=inputs.attention_mask)[0]  # (B, L, D)
-        
-        # SS2D를 포함한 enhanced 모델로 예측
-        logits = model(image_features, text_features)  # (B, B)
-        logits = logits.mean(dim=0)  # (B,)
+        outputs = clip(**inputs)
+        logits = outputs.logits_per_image  # (4,)
         probs = logits.softmax(dim=-1)
         pred = probs.argmax().item()
 

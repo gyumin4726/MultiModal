@@ -9,7 +9,7 @@ TEST_006,./input_images/TEST_006.jpg,What is the typical habitat of the type of 
 TEST_007,./input_images/TEST_007.jpg,What is the likely purpose of the room in the image?,For exercising,For studying,For sleeping,For dining,,,,B
 TEST_008,./input_images/TEST_008.jpg,"Based on the image, which type of athletic footwear is most suitable for the activity depicted?",Swim fins,Running shoes,Basketball shoes,Snow boots,,,,B
 TEST_009,./input_images/TEST_009.jpg,What is the main color of the squirrel in the image?,Black,White,Brown,Gray,,,,C
-TEST_010,./input_images/TEST_010.jpg,What is the primary object in the image?,A pair of shoes,A bicycle,A car,A skateboard,,,,A
+TEST_010,./input_images/TEST_010.jpg,What is the primary object in the image?,A pair of shoes,A bicycle,A car,A skateboard,,,,D
 TEST_011,./input_images/TEST_011.jpg,What would you typically find in a library like the one in the image?,Books and study materials,Cooking utensils,Beds and wardrobes,Exercise equipment,,,,A
 TEST_012,./input_images/TEST_012.jpg,What is the main color of the decorations in the image?,Green,Yellow,Red,Blue,,,,B
 TEST_013,./input_images/TEST_013.jpg,"Based on the image, what can be inferred about the climber's physical condition?",The climber is physically fit.,The climber is unfit.,The climber is injured.,The climber is elderly.,,,,A

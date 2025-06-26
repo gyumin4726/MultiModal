@@ -22,7 +22,7 @@ def seed_everything(seed=42):
     torch.backends.cudnn.benchmark = False
 seed_everything()
 
-# CLIP 모델 로드 - LAION의 ViT-Huge 모델 사용
+# CLIP 모델 로드
 clip_model_name = "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"
 print(f"✅ Loading model: {clip_model_name}")
 clip = CLIPModel.from_pretrained(clip_model_name).to(device)
@@ -32,12 +32,13 @@ clip.eval()
 # 예측 함수
 def predict(image_path, question, choices):
     image = Image.open(image_path).convert("RGB")
-    prompts = [f"{question} 선택지: {choice}" for choice in choices]
+    prompts = [f"This image shows that {choice.lower()}." for choice in choices]
+
     inputs = processor(text=prompts, images=[image]*4, return_tensors="pt", padding=True).to(device)
 
     with torch.no_grad():
         outputs = clip(**inputs)
-        logits = outputs.logits_per_image  # (4,)
+        logits = outputs.logits_per_image
         probs = logits.softmax(dim=-1)
         pred = probs.argmax().item()
 

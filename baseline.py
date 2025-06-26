@@ -6,6 +6,8 @@ from PIL import Image
 from tqdm import tqdm
 from transformers import CLIPProcessor, CLIPModel
 from datetime import datetime
+from collections import Counter
+import cv2
 
 # 환경 설정
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -22,6 +24,69 @@ def seed_everything(seed=42):
     torch.backends.cudnn.benchmark = False
 seed_everything()
 
+# 색상 정의 및 매칭
+COLOR_MAPPINGS = {
+    'red': ([0, 50, 50], [10, 255, 255]),  # 빨강
+    'green': ([35, 50, 50], [85, 255, 255]),  # 초록
+    'blue': ([100, 50, 50], [130, 255, 255]),  # 파랑
+    'yellow': ([20, 50, 50], [35, 255, 255]),  # 노랑
+    'black': ([0, 0, 0], [180, 255, 30]),  # 검정
+    'white': ([0, 0, 200], [180, 30, 255]),  # 흰색
+    'brown': ([10, 50, 20], [20, 255, 200]),  # 갈색
+    'gray': ([0, 0, 40], [180, 30, 220]),  # 회색
+    'pink': ([150, 50, 50], [170, 255, 255]),  # 분홍
+}
+
+def get_color_distribution(image, region=None):
+    # 이미지를 HSV 색공간으로 변환
+    img_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2HSV)
+    
+    if region == 'sky':
+        # 하늘은 이미지 상단 1/3 영역으로 가정
+        height = img_cv.shape[0]
+        img_cv = img_cv[:height//3, :, :]
+    elif region == 'ground':
+        # 지면은 이미지 하단 1/3 영역으로 가정
+        height = img_cv.shape[0]
+        img_cv = img_cv[2*height//3:, :, :]
+    
+    color_counts = Counter()
+    total_pixels = img_cv.shape[0] * img_cv.shape[1]
+    
+    for color_name, (lower, upper) in COLOR_MAPPINGS.items():
+        lower = np.array(lower)
+        upper = np.array(upper)
+        mask = cv2.inRange(img_cv, lower, upper)
+        color_counts[color_name] = np.sum(mask > 0) / total_pixels
+    
+    return color_counts
+
+def get_dominant_colors(image, top_n=2):
+    color_dist = get_color_distribution(image)
+    return [color for color, _ in color_dist.most_common(top_n)]
+
+def analyze_color_question(question, choices, image):
+    # 질문에서 특정 객체나 영역 파악
+    question_lower = question.lower()
+    
+    # 특정 영역 분석
+    if 'sky' in question_lower or '하늘' in question_lower:
+        color_dist = get_color_distribution(image, region='sky')
+    else:
+        color_dist = get_color_distribution(image)
+    
+    # 가장 많이 나타나는 색상들
+    dominant_colors = [color for color, freq in color_dist.most_common() if freq > 0.1]
+    
+    # 선택지와 매칭
+    for idx, choice in enumerate(choices):
+        choice_lower = choice.lower()
+        for color in dominant_colors:
+            if color in choice_lower:
+                return idx
+    
+    return None
+
 # CLIP 모델 로드
 clip_model_name = "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"
 print(f"✅ Loading model: {clip_model_name}")
@@ -32,8 +97,19 @@ clip.eval()
 # 예측 함수
 def predict(image_path, question, choices):
     image = Image.open(image_path).convert("RGB")
-    prompts = [f"This image shows that {choice.lower()}." for choice in choices]
-
+    
+    # 색상 관련 질문인지 확인
+    color_keywords = ['color', 'colours', '색상', '색깔']
+    is_color_question = any(keyword in question.lower() for keyword in color_keywords)
+    
+    if is_color_question:
+        # 색상 분석 수행
+        color_pred = analyze_color_question(question, choices, image)
+        if color_pred is not None:
+            return color_pred
+    
+    # 색상 분석으로 답을 찾지 못했거나 다른 종류의 질문인 경우 CLIP 모델 사용
+    prompts = [f"{question} 선택지: {choice}" for choice in choices]
     inputs = processor(text=prompts, images=[image]*4, return_tensors="pt", padding=True).to(device)
 
     with torch.no_grad():
